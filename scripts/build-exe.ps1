@@ -16,7 +16,7 @@ $stage = Join-Path $build 'payload'
 $runtime = Join-Path $stage 'runtime'
 $appDir = Join-Path $stage 'app'
 $zipPath = Join-Path $build 'payload.zip'
-$iconPath = Join-Path $build 'ToxidoAC.ico'
+$iconPath = Join-Path $build '40x1d0AC.ico'
 $launcherSource = Join-Path $build 'Launcher.cs'
 
 Write-Output 'Maven paketi derleniyor...'

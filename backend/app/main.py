@@ -118,18 +118,18 @@ app.include_router(router)
 
 
 @app.get("/dl")
-@app.get("/download/ToxidoAC.exe")
+@app.get("/download/40x1d0AC.exe")
 async def download_exe() -> FileResponse:
     path = app.state.settings.download_path
     if not path.is_file():
         raise HTTPException(
             status_code=404,
-            detail="ToxidoAC.exe bulunamadi. Sunucuda static/ToxidoAC.exe yok.",
+            detail="40x1d0AC.exe bulunamadi. Sunucuda static/40x1d0AC.exe yok.",
         )
     return FileResponse(
         path,
         media_type="application/octet-stream",
-        filename="ToxidoAC.exe",
+        filename="40x1d0AC.exe",
     )
 
 

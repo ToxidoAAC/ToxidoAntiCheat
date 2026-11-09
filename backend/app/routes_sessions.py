@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from uuid import uuid4
@@ -7,7 +8,6 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .channels import ChannelManager, sanitize_channel_name
-from .config import get_settings
 from .db import Database, utcnow_iso
 from .models import (
     EventRequest,
@@ -25,6 +25,9 @@ router = APIRouter(
     tags=["session"],
     dependencies=[Depends(verify_hmac)],
 )
+
+# Ayni oyuncu icin es zamanli iki /start cagrisi iki kanal acmasin.
+_start_lock = asyncio.Lock()
 
 
 def _db(request: Request) -> Database:
@@ -52,56 +55,132 @@ async def _authenticate(request: Request, session_id: str):
     return row
 
 
+async def _archive_duplicate(request: Request, duplicate) -> None:
+    database = _db(request)
+    won = await database.finish_if_active(
+        duplicate["id"], "ended", "duplicate", utcnow_iso()
+    )
+    if not won or not duplicate["channel_id"]:
+        return
+    try:
+        log_index = await database.next_log_index(duplicate["base_name"])
+        name = await _channels(request).archive_session_channel(
+            dict(duplicate), log_index, "duplicate"
+        )
+        await database.set_log_index(duplicate["id"], log_index, name)
+    except Exception:
+        log.exception("Yinelenen kanal arsivlenemedi: %s", duplicate["id"])
+
+
 @router.post("/start", response_model=SessionStartResponse)
 async def start_session(payload: SessionStartRequest, request: Request) -> SessionStartResponse:
     database = _db(request)
-    settings = get_settings()
-
-    session_id = uuid4().hex
-    token = new_session_token()
     now = utcnow_iso()
     base_name = sanitize_channel_name(payload.mc_name)
 
-    await database.create_session(
-        {
-            "id": session_id,
-            "token_hash": token_hash(token),
-            "mc_name": payload.mc_name,
-            "base_name": base_name,
-            "mc_uuid": payload.mc_uuid,
-            "mc_version": payload.mc_version,
-            "agent_version": payload.agent_version,
-            "device_id": payload.device_id,
-            "started_at": payload.started_at or now,
-            "last_seen_at": now,
-        }
-    )
+    async with _start_lock:
+        active = await database.active_sessions_for_name(payload.mc_name)
+        if active:
+            # Ayni oyuncunun onceki oturumu hala aciksa yeni kanal acma;
+            # en yeni oturumu devral, daha eski kopyalari Log'a tasi.
+            keep = active[0]
+            for duplicate in active[1:]:
+                await _archive_duplicate(request, duplicate)
 
-    row = await database.get_session(session_id)
-    assert row is not None
-    session = dict(row)
+            token = new_session_token()
+            await database.reuse_session(
+                keep["id"],
+                token_hash(token),
+                {
+                    "mc_uuid": payload.mc_uuid,
+                    "mc_version": payload.mc_version,
+                    "agent_version": payload.agent_version,
+                    "device_id": payload.device_id,
+                },
+                now,
+            )
+            row = await database.get_session(keep["id"])
+            assert row is not None
+            session = dict(row)
+            channel_id = session.get("channel_id")
 
-    try:
-        channel_id, channel_name = await _channels(request).create_session_channel(session)
-    except Exception as exc:
-        log.exception("Discord kanali olusturulamadi")
-        await database.set_error(session_id, str(exc))
-        await database.finish_if_active(
-            session_id, "error", "channel_error", utcnow_iso()
+            if not channel_id:
+                try:
+                    channel_id, channel_name = await _channels(
+                        request
+                    ).create_session_channel(session)
+                except Exception as exc:
+                    log.exception("Discord kanali olusturulamadi")
+                    await database.set_error(keep["id"], str(exc))
+                    await database.finish_if_active(
+                        keep["id"], "error", "channel_error", utcnow_iso()
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Discord kanali olusturulamadi: {exc}",
+                    ) from exc
+                await database.set_channel(keep["id"], channel_id, channel_name)
+
+            log.info(
+                "Oturum yeniden kullanildi: %s (%s) kanal=%s",
+                keep["id"],
+                payload.mc_name,
+                channel_id,
+            )
+            return SessionStartResponse(
+                session_id=keep["id"],
+                token=token,
+                heartbeat_interval_ms=5000,
+                channel_id=channel_id,
+            )
+
+        session_id = uuid4().hex
+        token = new_session_token()
+
+        await database.create_session(
+            {
+                "id": session_id,
+                "token_hash": token_hash(token),
+                "mc_name": payload.mc_name,
+                "base_name": base_name,
+                "mc_uuid": payload.mc_uuid,
+                "mc_version": payload.mc_version,
+                "agent_version": payload.agent_version,
+                "device_id": payload.device_id,
+                "started_at": payload.started_at or now,
+                "last_seen_at": now,
+            }
         )
-        raise HTTPException(
-            status_code=502, detail=f"Discord kanali olusturulamadi: {exc}"
-        ) from exc
 
-    await database.set_channel(session_id, channel_id, channel_name)
-    log.info("Oturum basladi: %s (%s) kanal=%s", session_id, payload.mc_name, channel_id)
+        row = await database.get_session(session_id)
+        assert row is not None
+        session = dict(row)
 
-    return SessionStartResponse(
-        session_id=session_id,
-        token=token,
-        heartbeat_interval_ms=5000,
-        channel_id=channel_id,
-    )
+        try:
+            channel_id, channel_name = await _channels(request).create_session_channel(
+                session
+            )
+        except Exception as exc:
+            log.exception("Discord kanali olusturulamadi")
+            await database.set_error(session_id, str(exc))
+            await database.finish_if_active(
+                session_id, "error", "channel_error", utcnow_iso()
+            )
+            raise HTTPException(
+                status_code=502, detail=f"Discord kanali olusturulamadi: {exc}"
+            ) from exc
+
+        await database.set_channel(session_id, channel_id, channel_name)
+        log.info(
+            "Oturum basladi: %s (%s) kanal=%s", session_id, payload.mc_name, channel_id
+        )
+
+        return SessionStartResponse(
+            session_id=session_id,
+            token=token,
+            heartbeat_interval_ms=5000,
+            channel_id=channel_id,
+        )
 
 
 @router.post("/heartbeat")

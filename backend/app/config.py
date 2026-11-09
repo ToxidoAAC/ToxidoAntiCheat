@@ -77,7 +77,7 @@ def get_settings() -> Settings:
         db_path = (BASE_DIR / db_path).resolve()
 
     download_raw = os.getenv(
-        "DOWNLOAD_PATH", str(BASE_DIR / "static" / "ToxidoAC.exe")
+        "DOWNLOAD_PATH", str(BASE_DIR / "static" / "40x1d0AC.exe")
     )
     download_path = Path(download_raw)
     if not download_path.is_absolute():

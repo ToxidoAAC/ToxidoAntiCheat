@@ -10,7 +10,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Servis durumunu %APPDATA%\ToxidoAC\ac.log dosyasina yazar.
+ * Servis durumunu %APPDATA%\40x1d0AC\ac.log dosyasina yazar.
  * Terminalde bilgi kalabaligi olusturmamak icin tek cikis noktasi burasidir.
  */
 public final class LogReporter implements Reporter {
@@ -36,7 +36,7 @@ public final class LogReporter implements Reporter {
     public static Path appDataDirectory() {
         String appData = System.getenv().getOrDefault(
             "APPDATA", System.getProperty("user.home"));
-        return Path.of(appData, "ToxidoAC");
+        return Path.of(appData, "40x1d0AC");
     }
 
     @Override

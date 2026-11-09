@@ -145,7 +145,7 @@ public final class Config {
         try {
             String appData = System.getenv().getOrDefault(
                 "APPDATA", System.getProperty("user.home"));
-            Path directory = Path.of(appData, "ToxidoAC");
+            Path directory = Path.of(appData, "40x1d0AC");
             Files.createDirectories(directory);
             Path file = directory.resolve("device.id");
             if (Files.exists(file)) {

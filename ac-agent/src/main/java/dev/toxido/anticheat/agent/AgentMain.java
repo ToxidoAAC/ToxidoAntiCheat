@@ -33,7 +33,7 @@ public final class AgentMain {
 
         log("Ajan yuklendi (" + mode + "), port=" + port + ", surum=" + VERSION);
 
-        Thread thread = new Thread(new AgentClient(port, token), "toxido-ac-agent");
+        Thread thread = new Thread(new AgentClient(port, token), "40x1d0AC-agent");
         thread.setDaemon(true);
         thread.start();
 
@@ -62,7 +62,7 @@ public final class AgentMain {
         String line = "[" + Instant.now() + "] " + message;
         System.err.println("[ToxidoAC] " + line);
         try {
-            Path file = Path.of(System.getProperty("java.io.tmpdir"), "toxido-ac-agent.log");
+            Path file = Path.of(System.getProperty("java.io.tmpdir"), "40x1d0AC-agent.log");
             Files.writeString(
                 file,
                 line + System.lineSeparator(),

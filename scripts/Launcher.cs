@@ -19,7 +19,7 @@ internal static class Program
             PrepareConsole();
 
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string engineRoot = Path.Combine(local, "ToxidoAC", "engine");
+            string engineRoot = Path.Combine(local, "40x1d0AC", "engine");
             string engine = Path.Combine(engineRoot, PayloadId);
             string java = Path.Combine(engine, "runtime", "bin", "java.exe");
             string app = Path.Combine(engine, "app", "ac-app.jar");
@@ -175,7 +175,7 @@ internal static class Program
 
             string temp = Path.Combine(
                 Path.GetTempPath(),
-                "toxido-ac-" + Guid.NewGuid().ToString("N") + ".zip");
+                "40x1d0AC-" + Guid.NewGuid().ToString("N") + ".zip");
 
             using (Stream input = Assembly.GetExecutingAssembly()
                 .GetManifestResourceStream("payload.zip"))
@@ -213,7 +213,7 @@ internal static class Program
     {
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ToxidoAC",
+            "40x1d0AC",
             "launcher.log");
     }
 

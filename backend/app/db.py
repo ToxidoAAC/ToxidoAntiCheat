@@ -104,6 +104,45 @@ class Database:
         ) as cursor:
             return list(await cursor.fetchall())
 
+    async def active_sessions_for_name(self, mc_name: str) -> list[aiosqlite.Row]:
+        assert self.conn is not None
+        async with self.conn.execute(
+            """
+            SELECT * FROM sessions
+             WHERE status = 'active' AND lower(mc_name) = lower(?)
+             ORDER BY started_at DESC
+            """,
+            (mc_name,),
+        ) as cursor:
+            return list(await cursor.fetchall())
+
+    async def reuse_session(
+        self,
+        session_id: str,
+        token_hash_value: str,
+        data: dict[str, Any],
+        when: str,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            UPDATE sessions
+               SET token_hash = ?, mc_uuid = ?, mc_version = ?,
+                   agent_version = ?, device_id = ?, last_seen_at = ?
+             WHERE id = ? AND status = 'active'
+            """,
+            (
+                token_hash_value,
+                data.get("mc_uuid"),
+                data.get("mc_version"),
+                data.get("agent_version"),
+                data.get("device_id"),
+                when,
+                session_id,
+            ),
+        )
+        await self.conn.commit()
+
     async def touch(self, session_id: str, when: str) -> None:
         assert self.conn is not None
         await self.conn.execute(

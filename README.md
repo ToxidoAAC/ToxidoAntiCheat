@@ -108,9 +108,9 @@ Servis durumlari ve hatalar su dosyalara yazilir:
 
 | Dosya | Icerik |
 |---|---|
-| `%APPDATA%\ToxidoAC\ac.log` | Servis durumu, Minecraft/agent/API olaylari |
-| `%APPDATA%\ToxidoAC\launcher.log` | Splash'in servisi baslatma kaydi |
-| `%APPDATA%\ToxidoAC\service.out` | Arka plan servisinin stdout/stderr ciktisi |
+| `%APPDATA%\40x1d0AC\ac.log` | Servis durumu, Minecraft/agent/API olaylari |
+| `%APPDATA%\40x1d0AC\launcher.log` | Splash'in servisi baslatma kaydi |
+| `%APPDATA%\40x1d0AC\service.out` | Arka plan servisinin stdout/stderr ciktisi |
 
 Ayni anda yalnizca bir servis calisir; ikinci baslatma `service.lock`
 tarafindan engellenir. Servis, Minecraft kapaninca kendiliginden durur.
@@ -130,7 +130,7 @@ jar'larin derlenmis olmasi gerekir.
 `dist/40x1d0AC.exe`, Java kurulumu gerektirmeyen tek dosyalik surumdur.
 Icinde jlink ile olusturulmus Java 21 runtime, `ac-app.jar`, `ac-agent.jar`
 ve `client.properties` paketlenir. Ilk calistirmada icerik
-`%LOCALAPPDATA%\ToxidoAC\engine\<payload-id>\` altina cikarilir; sonraki
+`%LOCALAPPDATA%\40x1d0AC\engine\<payload-id>\` altina cikarilir; sonraki
 acilislarda hazir paket kullanilir. Minecraft'a mod kurulmaz.
 
 ### EXE olusturma
@@ -150,17 +150,18 @@ java.logging,java.management` modulleriyle olusturur.
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
 Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.1**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.2**
 
 Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.1/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; & $env:TEMP\40x1d0AC.exe"
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.2/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
-Komut dosyayi `%TEMP%` altina indirir ve calistirir. Ilk calistirmada paket
-cikarilirken kisa bir `Toxido AC hazirlaniyor...` satiri gorunur; ardindan
-terminal splash acilir. **Enter** splash'i kapatir, servis arka planda devam
+Komut dosyayi `%TEMP%` altina indirir, ayri bir terminalde baslatir ve komutun
+yazildigi terminali kapatir. Ilk calistirmada paket cikarilirken kisa bir
+`Toxido AC hazirlaniyor...` satiri gorunur; ardindan terminal splash acilir.
+**Enter** splash'i ve onun terminal penceresini kapatir; servis arka planda devam
 eder.
 
 Notlar:
