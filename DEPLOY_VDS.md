@@ -42,7 +42,7 @@ API_KEY=<guclu-anahtar>
 API_SECRET=<guclu-sir>
 
 DB_PATH=./data/toxido.db
-DOWNLOAD_PATH=./static/ToxidoAC.exe
+DOWNLOAD_PATH=./static/40x1d0AC.exe
 HOST=0.0.0.0
 PORT=25364
 DRY_RUN=0
@@ -133,20 +133,20 @@ $env:AC_API_SECRET = "..."
 
 ## 7. Tek EXE dagitimi
 
-**ToxidoAC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
+**40x1d0AC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
 botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.0**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.1**
 
 Tek komut:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.0/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.1/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; & $env:TEMP\40x1d0AC.exe"
 ```
 
-Backend'deki `/dl` ve `/download/ToxidoAC.exe` yollari istege baglidir. VDS'te
-kullanmak isterseniz `dist\ToxidoAC.exe` dosyasini
-`/home/container/static/ToxidoAC.exe` konumuna koyun ve `.env` icindeki
+Backend'deki `/dl` ve `/download/40x1d0AC.exe` yollari istege baglidir. VDS'te
+kullanmak isterseniz `dist\40x1d0AC.exe` dosyasini
+`/home/container/static/40x1d0AC.exe` konumuna koyun ve `.env` icindeki
 `DOWNLOAD_PATH` degerini kontrol edin. Bu yol varsayilan dagitim yontemi
 degildir. EXE imzasiz oldugu icin SmartScreen uyarisi cikabilir.
 

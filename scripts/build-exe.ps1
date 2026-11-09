@@ -8,7 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\dev-env.ps1')
 
 if (-not $Output) {
-    $Output = Join-Path $root 'dist\ToxidoAC.exe'
+    $Output = Join-Path $root 'dist\40x1d0AC.exe'
 }
 
 $build = Join-Path $root 'build\exe'
@@ -85,7 +85,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 )
 
 Write-Output 'Ikon kopyalaniyor...'
-$iconSource = Join-Path $root 'assets\ToxidoAC.ico'
+$iconSource = Join-Path $root 'assets\40x1d0AC.ico'
 if (-not (Test-Path $iconSource)) { throw "Ikon bulunamadi: $iconSource" }
 Copy-Item $iconSource $iconPath -Force
 Write-Output 'Baslatici derleniyor...'

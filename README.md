@@ -35,7 +35,7 @@ ac-app (terminal + arka plan servisi) --HMAC HTTPS--> backend (FastAPI)
 
 ## Gereksinimler
 
-- Windows 10/11 (son kullanici icin yalnizca `ToxidoAC.exe`; Java gerekmez)
+- Windows 10/11 (son kullanici icin yalnizca `40x1d0AC.exe`; Java gerekmez)
 - Gelistirme: JDK 21 (projede `C:\Users\Toxido\tools\jdk-21` kullaniliyor),
   Maven 3.9+, Python 3.12+
 - Discord botu (gercek mod icin)
@@ -119,7 +119,7 @@ Minecraft acik degilken baslatilirsa oyunu bekler. Elle durdurmak icin
 
 ### Masaustu baslatici
 
-Proje kokundeki `ToxidoAC.bat` terminal splash'ini baslatir. Cift tiklamak
+Proje kokundeki `40x1d0AC.bat` terminal splash'ini baslatir. Cift tiklamak
 icin `Toxido Anti Cheat` kisayolu masaustune eklendi. Kisayol proje kokunu
 calisma dizini olarak kullanir; projeyi tasirsaniz kisayolu yeniden
 olusturmaniz gerekir. Baslatmadan once `mvn -B -DskipTests package` ile
@@ -127,7 +127,7 @@ jar'larin derlenmis olmasi gerekir.
 
 ## Tek EXE (Windows)
 
-`dist/ToxidoAC.exe`, Java kurulumu gerektirmeyen tek dosyalik surumdur.
+`dist/40x1d0AC.exe`, Java kurulumu gerektirmeyen tek dosyalik surumdur.
 Icinde jlink ile olusturulmus Java 21 runtime, `ac-app.jar`, `ac-agent.jar`
 ve `client.properties` paketlenir. Ilk calistirmada icerik
 `%LOCALAPPDATA%\ToxidoAC\engine\<payload-id>\` altina cikarilir; sonraki
@@ -140,7 +140,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\build-exe.ps1
 ```
 
-Cikti: `dist\ToxidoAC.exe` (yaklasik 24 MB). Gereksinimler: JDK 21, Maven ve
+Cikti: `dist\40x1d0AC.exe` (yaklasik 24 MB). Gereksinimler: JDK 21, Maven ve
 Windows'un yerlesik .NET Framework `csc.exe` derleyicisi. `jlink` runtime'i
 `java.base,java.compiler,java.net.http,java.sql,jdk.attach,jdk.unsupported,
 java.logging,java.management` modulleriyle olusturur.
@@ -150,12 +150,12 @@ java.logging,java.management` modulleriyle olusturur.
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
 Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.0**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.1**
 
 Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.0/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.1/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; & $env:TEMP\40x1d0AC.exe"
 ```
 
 Komut dosyayi `%TEMP%` altina indirir ve calistirir. Ilk calistirmada paket
@@ -167,8 +167,8 @@ Notlar:
 
 - EXE imzalanmadigi icin Windows SmartScreen ilk acilista uyari gosterebilir:
   **More info -> Run anyway**.
-- `dist\ToxidoAC.exe` git'e eklenmez; her surumde yeniden uretilir.
-- Teshis icin `dist\ToxidoAC.exe --print-path` paketin cikarildigi dizini
+- `dist\40x1d0AC.exe` git'e eklenmez; her surumde yeniden uretilir.
+- Teshis icin `dist\40x1d0AC.exe --print-path` paketin cikarildigi dizini
   yazdirir.
 - Backend'deki `/dl` yolu istege baglidir; kullanilirsa `DOWNLOAD_PATH`
   ayarindaki dosyayi sunar, ancak istemci dagitimi icin onerilmez.
@@ -268,7 +268,7 @@ kanali acar.
 - Zaman damgasi ±300 saniye, nonce tek kullanimlik (10 dakika onbellek).
 - Oturum token'i yalnizca heartbeat/end icin `Authorization: Bearer` olarak
   gonderilir; veritabaninda SHA-256 ozeti tutulur.
-- `GET /dl` (ve `GET /download/ToxidoAC.exe`) `static/ToxidoAC.exe` dosyasini
+- `GET /dl` (ve `GET /download/40x1d0AC.exe`) `static/40x1d0AC.exe` dosyasini
   indirir; baska bir yol icin `DOWNLOAD_PATH` kullanilabilir.
 - Uretimde HTTPS zorunludur (Caddy / Let's Encrypt onerilir).
 
@@ -300,11 +300,11 @@ ac-app/        Terminal splash + arka plan servisi (Config, MinecraftProcess,
                AgentBridge, AttachService, ApiClient, AppController,
                TerminalSplash, ServiceMain, LogReporter, ServiceLock)
 backend/app/   FastAPI, SQLite, Discord kanal yonetimi, bot
-backend/static/ Indirilebilir ToxidoAC.exe (VDS'e ayrica yuklenir)
-ToxidoAC.bat   Masaustu/cift tik baslatici
+backend/static/ Indirilebilir 40x1d0AC.exe (VDS'e ayrica yuklenir)
+40x1d0AC.bat   Masaustu/cift tik baslatici
 backend/       requirements, .env.example, smoke_test.py, run.py
 scripts/       dev-env, run-backend, run-app, build-exe, Launcher.cs
-dist/          ToxidoAC.exe ve dagitim paketleri (git'e eklenmez)
+dist/          40x1d0AC.exe ve dagitim paketleri (git'e eklenmez)
 tools/         fake Minecraft ve tani araclari
 ```
 
