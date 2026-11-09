@@ -31,4 +31,5 @@ class SessionEndRequest(BaseModel):
 class EventRequest(BaseModel):
     session_id: str
     type: str
+    event_key: str | None = None
     payload: dict | None = None

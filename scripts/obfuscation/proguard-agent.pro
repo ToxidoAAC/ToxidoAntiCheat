@@ -20,6 +20,9 @@
 
 # Agent-Class and Premain-Class in the manifest point at this class.
 -keep class dev.toxido.anticheat.agent.AgentMain { *; }
+-keep class dev.toxido.anticheat.agent.HookBridge { public *; }
+-keep class dev.toxido.anticheat.agent.AttackEvent { *; }
+-keep class dev.toxido.anticheat.agent.asm.** { *; }
 
 -injars ../../ac-agent/target/ac-agent.jar
 -outjars ../../build/obfuscation/ac-agent.jar

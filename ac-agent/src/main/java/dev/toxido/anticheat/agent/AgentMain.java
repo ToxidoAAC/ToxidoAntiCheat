@@ -7,13 +7,16 @@ import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.jar.JarFile;
 
 /**
  * Minecraft JVM'ine attach ile yuklenen ajan.
- * Mod degildir; Fabric/Forge gerektirmez.
+ * Mod degildir; Fabric/Forge/NeoForge gerektirmez.
  */
 public final class AgentMain {
-    public static final String VERSION = "0.1.0";
+    public static final String VERSION = "0.2.0";
+
+    private static volatile JarFile bootstrapJar;
 
     private AgentMain() {
     }
@@ -30,17 +33,49 @@ public final class AgentMain {
         Map<String, String> options = parse(args);
         int port = Integer.parseInt(options.getOrDefault("port", "0"));
         String token = options.getOrDefault("token", "");
+        String version = options.getOrDefault("version", "unknown");
 
         log("Ajan yuklendi (" + mode + "), port=" + port + ", surum=" + VERSION);
 
-        Thread thread = new Thread(new AgentClient(port, token), "40x1d0AC-agent");
+        if (instrumentation != null) {
+            appendToBootstrap(instrumentation);
+            log("Instrumentation hazir; yeniden tanimlama=" + instrumentation.isRedefineClassesSupported());
+        }
+
+        AgentClient client = new AgentClient(port, token);
+        Thread thread = new Thread(client, "40x1d0AC-agent");
         thread.setDaemon(true);
         thread.start();
 
-        // Faz 2: instrumentation uzerinden sinif enstrumantasyonu ve
-        // yuklu ajan/modul tespiti burada baslayacak.
         if (instrumentation != null) {
-            log("Instrumentation hazir; yeniden tanimlama=" + instrumentation.isRedefineClassesSupported());
+            Phase2.start(instrumentation, client, version);
+        }
+    }
+
+    static void onConnected(AgentClient client) {
+        Phase2.announce(client);
+    }
+
+    private static void appendToBootstrap(Instrumentation instrumentation) {
+        try {
+            java.net.URL location = AgentMain.class.getProtectionDomain()
+                .getCodeSource().getLocation();
+            Path agentPath = Path.of(location.toURI());
+            Path hookPath = agentPath.getParent() == null
+                ? null
+                : agentPath.getParent().resolve("ac-agent-hook.jar");
+            if (hookPath == null || !Files.isRegularFile(hookPath)) {
+                log("Hook jar bulunamadi; bootstrap eklemesi atlandi.");
+                return;
+            }
+            bootstrapJar = new JarFile(hookPath.toFile());
+            instrumentation.appendToBootstrapClassLoaderSearch(bootstrapJar);
+            // Yalnizca HookBridge/AttackEvent bootstrap'a girer; AgentMain ve
+            // AgentClient sistem classloader'inda kalir.
+            Class.forName("dev.toxido.anticheat.agent.HookBridge", true, null);
+            log("Hook jar bootstrap classloader'a eklendi: " + hookPath);
+        } catch (Throwable throwable) {
+            log("Bootstrap eklemesi basarisiz: " + throwable);
         }
     }
 

@@ -177,3 +177,118 @@ class ChannelManager:
         embed.add_field(name="Arsiv", value=f"`{new_name}`", inline=True)
         embed.set_footer(text=f"Oturum: {session['id']}")
         return embed
+
+    async def send_event_alert(
+        self, session: dict, event_type: str, payload: dict
+    ) -> None:
+        if event_type not in {"injection", "triggerbot"}:
+            return
+        if not self.enabled:
+            log.info("[DRY-RUN] %s uyarisi: %s", event_type, payload)
+            return
+
+        guild = self.bot.get_guild(self.settings.guild_id)  # type: ignore[union-attr]
+        if guild is None:
+            log.warning("Discord sunucusu bulunamadi: %s", self.settings.guild_id)
+            return
+
+        channel_id = session.get("channel_id")
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if channel is None:
+            log.warning("Uyari kanali bulunamadi: %s", channel_id)
+            return
+
+        await channel.send(embed=self._event_embed(session, event_type, payload))
+
+    @staticmethod
+    def _event_embed(
+        session: dict, event_type: str, payload: dict
+    ) -> discord.Embed:
+        if event_type == "injection":
+            embed = discord.Embed(
+                title="Supheli Enjeksiyon Tespiti",
+                color=0xE67E22,
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(
+                name="Oyuncu", value=f"`{session['mc_name']}`", inline=True
+            )
+            embed.add_field(
+                name="Tur", value=f"`{payload.get('kind', '?')}`", inline=True
+            )
+            embed.add_field(
+                name="Guven",
+                value=f"`{payload.get('confidence', '?')}`",
+                inline=True,
+            )
+            for key, label in (
+                ("name", "Ad"),
+                ("path", "Dosya"),
+                ("sha256", "SHA-256"),
+                ("signature", "Imza"),
+                ("description", "Aciklama"),
+                ("evidence", "Kanit"),
+            ):
+                value = payload.get(key)
+                if value:
+                    embed.add_field(
+                        name=label, value=_clip(str(value)), inline=False
+                    )
+            exists = payload.get("exists")
+            if exists is not None:
+                embed.add_field(
+                    name="Dosya durumu",
+                    value=("`mevcut`" if exists else "`silinmis`"),
+                    inline=True,
+                )
+        else:
+            embed = discord.Embed(
+                title="TriggerBot Tespiti",
+                color=0xE74C3C,
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(
+                name="Oyuncu", value=f"`{session['mc_name']}`", inline=True
+            )
+            embed.add_field(
+                name="Sonuc",
+                value=f"`{payload.get('verdict', '?')}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Hedef",
+                value=f"`{payload.get('target_name') or payload.get('target_type') or '?'}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Fiziksel tik",
+                value=f"`{payload.get('physical_click', False)}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Injected tik",
+                value=f"`{payload.get('injected_click', False)}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Tik yasi",
+                value=f"`{payload.get('input_age_ms', '?')} ms`",
+                inline=True,
+            )
+            for key, label in (
+                ("hook", "Hook"),
+                ("reason", "Sebep"),
+                ("evidence", "Kanit"),
+            ):
+                value = payload.get(key)
+                if value:
+                    embed.add_field(
+                        name=label, value=_clip(str(value)), inline=False
+                    )
+
+        embed.set_footer(text=f"Oturum: {session['id']}")
+        return embed
+
+
+def _clip(value: str, limit: int = 1000) -> str:
+    return value if len(value) <= limit else value[: limit - 3] + '...'

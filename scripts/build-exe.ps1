@@ -197,6 +197,70 @@ if ((Get-Content $clientConfig -Raw) -match '(?m)^\s*api\.(key|secret)\s*=') {
     throw 'client.properties icinde hala duz metin api.key/api.secret var.'
 }
 
+Write-Output 'Giris ve modul yardimcilari derleniyor...'
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) {
+    throw "csc.exe bulunamadi: $csc"
+}
+$inputHelper = Join-Path $build '40x1d0AC-input.exe'
+$moduleScanner = Join-Path $build '40x1d0AC-scan.exe'
+& $csc /nologo /target:exe /platform:x64 /optimize+ `
+    "/out:$inputHelper" `
+    (Join-Path $root 'scripts\InputHelper.cs') `
+    /r:System.dll /r:System.Core.dll
+if ($LASTEXITCODE -ne 0) {
+    throw "Giris yardimcisi derlenemedi (exit $LASTEXITCODE)."
+}
+& $csc /nologo /target:exe /platform:x64 /optimize+ `
+    "/out:$moduleScanner" `
+    (Join-Path $root 'scripts\ModuleScanner.cs') `
+    /r:System.dll /r:System.Core.dll
+if ($LASTEXITCODE -ne 0) {
+    throw "Modul tarayicisi derlenemedi (exit $LASTEXITCODE)."
+}
+Copy-Item $inputHelper (Join-Path $appDir '40x1d0AC-input.exe') -Force
+Copy-Item $moduleScanner (Join-Path $appDir '40x1d0AC-scan.exe') -Force
+
+Write-Output 'Ajan hook jar hazirlaniyor...'
+$hookStage = Join-Path $build 'hook'
+if (Test-Path $hookStage) {
+    Remove-Item $hookStage -Recurse -Force
+}
+New-Item -ItemType Directory -Path $hookStage -Force | Out-Null
+$jar = Join-Path $env:JAVA_HOME 'bin\jar.exe'
+Push-Location $hookStage
+try {
+    & $jar xf $selectedAgentJar `
+        'dev/toxido/anticheat/agent/HookBridge.class' `
+        'dev/toxido/anticheat/agent/AttackEvent.class'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Hook siniflari ajan jar'indan cikarilamadi (exit $LASTEXITCODE)."
+    }
+
+    $hookJar = Join-Path $appDir 'ac-agent-hook.jar'
+    if (Test-Path $hookJar) {
+        Remove-Item $hookJar -Force
+    }
+    & $jar cf $hookJar `
+        'dev/toxido/anticheat/agent/HookBridge.class' `
+        'dev/toxido/anticheat/agent/AttackEvent.class'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Hook jar olusturulamadi (exit $LASTEXITCODE)."
+    }
+}
+finally {
+    Pop-Location
+}
+
+$hookEntries = & $jar tf (Join-Path $appDir 'ac-agent-hook.jar')
+if (-not ($hookEntries -contains 'dev/toxido/anticheat/agent/HookBridge.class') -or
+    -not ($hookEntries -contains 'dev/toxido/anticheat/agent/AttackEvent.class')) {
+    throw 'Hook jar beklenen siniflari icermiyor.'
+}
+if ($hookEntries -match 'AgentMain|AgentClient|Phase2') {
+    throw 'Hook jar icinde ajan siniflari olmamali.'
+}
+
 $payloadId = [Guid]::NewGuid().ToString('N')
 Set-Content -Path (Join-Path $stage 'payload.id') -Value $payloadId -Encoding ASCII -NoNewline
 
@@ -221,11 +285,6 @@ $source = $template.Replace('__PAYLOAD_ID__', $payloadId)
     $source,
     (New-Object System.Text.UTF8Encoding($true))
 )
-
-$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path $csc)) {
-    throw "csc.exe bulunamadi: $csc"
-}
 
 $dist = Split-Path -Parent $Output
 if (-not (Test-Path $dist)) {

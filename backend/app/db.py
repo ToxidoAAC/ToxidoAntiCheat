@@ -59,7 +59,19 @@ class Database:
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.execute("PRAGMA foreign_keys=ON")
         await self.conn.executescript(SCHEMA)
+        await self._migrate()
         await self.conn.commit()
+
+    async def _migrate(self) -> None:
+        assert self.conn is not None
+        async with self.conn.execute("PRAGMA table_info(events)") as cursor:
+            columns = {row["name"] for row in await cursor.fetchall()}
+        if "event_key" not in columns:
+            await self.conn.execute("ALTER TABLE events ADD COLUMN event_key TEXT")
+        await self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe "
+            "ON events(session_id, event_key) WHERE event_key IS NOT NULL"
+        )
 
     async def close(self) -> None:
         if self.conn is not None:
@@ -203,11 +215,23 @@ class Database:
         return int(row["m"]) + 1
 
     async def record_event(
-        self, session_id: str, event_type: str, payload: dict | None
-    ) -> None:
+        self,
+        session_id: str,
+        event_type: str,
+        payload: dict | None,
+        event_key: str | None = None,
+    ) -> bool:
         assert self.conn is not None
-        await self.conn.execute(
-            "INSERT INTO events (session_id, type, payload, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, event_type, json.dumps(payload or {}, ensure_ascii=False), utcnow_iso()),
+        cursor = await self.conn.execute(
+            "INSERT OR IGNORE INTO events "
+            "(session_id, type, payload, created_at, event_key) VALUES (?, ?, ?, ?, ?)",
+            (
+                session_id,
+                event_type,
+                json.dumps(payload or {}, ensure_ascii=False),
+                utcnow_iso(),
+                event_key,
+            ),
         )
         await self.conn.commit()
+        return cursor.rowcount == 1

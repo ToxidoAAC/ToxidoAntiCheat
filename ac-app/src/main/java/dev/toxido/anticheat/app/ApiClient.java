@@ -92,6 +92,23 @@ public final class ApiClient {
         post("/api/v1/session/end", gson.toJson(body), token, true);
     }
 
+    public void sendEvent(
+        String sessionId,
+        String token,
+        String event,
+        String eventKey,
+        JsonObject payload
+    ) throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("session_id", sessionId);
+        body.addProperty("type", event);
+        if (eventKey != null && !eventKey.isBlank()) {
+            body.addProperty("event_key", eventKey);
+        }
+        body.add("payload", payload == null ? new JsonObject() : payload);
+        post("/api/v1/session/event", gson.toJson(body), token, true);
+    }
+
     private JsonObject post(
         String path,
         String body,

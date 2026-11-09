@@ -1,7 +1,11 @@
 package dev.toxido.anticheat.app;
 
+import com.google.gson.JsonObject;
+
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,6 +36,8 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private volatile String sessionToken;
     private volatile long minecraftPid;
     private volatile ScheduledExecutorService scheduler;
+    private volatile ScheduledExecutorService scannerScheduler;
+    private final Set<String> reportedFindings = ConcurrentHashMap.newKeySet();
 
     public AppController(Config config, Reporter reporter) {
         this.config = config;
@@ -89,7 +95,8 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         bridge.start(this);
 
         reporter.status("Baglaniyor...", "Ajan yukleniyor (PID " + minecraft.pid() + ")");
-        String agentArgs = "port=" + bridge.port() + ";token=" + bridge.token();
+        String agentArgs = "port=" + bridge.port() + ";token=" + bridge.token()
+            + ";version=" + (minecraft.version() == null || minecraft.version().isBlank() ? "unknown" : minecraft.version());
         AttachService.loadAgent(minecraft.pid(), agentJar, agentArgs);
 
         if (!agentReady.await(config.attachTimeoutMs, TimeUnit.MILLISECONDS)) {
@@ -112,6 +119,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
 
         lastAgentHeartbeat.set(System.currentTimeMillis());
         startScheduler();
+        startModuleScanner(minecraft.pid());
         watchMinecraftProcess(minecraft);
 
         sessionEnded.await();
@@ -146,6 +154,73 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 triggerEnd("agent_silent");
             }
         }, 5, 5, TimeUnit.SECONDS);
+    }
+
+    private void startModuleScanner(long pid) {
+        Path helper = ModuleScanner.helperPath();
+        if (helper == null) {
+            reporter.log("Native tarayici bulunamadi; modul taramasi kapali.");
+            return;
+        }
+
+        scannerScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "toxido-ac-module-scan");
+            thread.setDaemon(true);
+            return thread;
+        });
+        scannerScheduler.scheduleAtFixedRate(() -> {
+            ModuleScanner.scan(helper, pid, finding -> {
+                if (!reportedFindings.add(finding.key)) {
+                    return;
+                }
+                sendFinding(finding);
+            });
+        }, 2, 30, TimeUnit.SECONDS);
+    }
+
+    private void sendFinding(ModuleScanner.Finding finding) {
+        String currentSession = sessionId;
+        String currentToken = sessionToken;
+        if (currentSession == null || currentToken == null) {
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", finding.kind);
+        payload.addProperty("name", finding.name);
+        payload.addProperty("path", finding.path);
+        payload.addProperty("sha256", finding.sha256);
+        payload.addProperty("signature", finding.signature);
+        payload.addProperty("description", finding.description);
+        payload.addProperty("confidence", finding.confidence);
+        payload.addProperty("evidence", finding.evidence);
+        payload.addProperty("exists", finding.exists);
+        payload.addProperty("deleted", finding.deleted);
+        try {
+            api.sendEvent(currentSession, currentToken, "injection", finding.key, payload);
+            reporter.log("Enjeksiyon bulgusu gonderildi: " + finding.name);
+        } catch (Exception exception) {
+            reporter.log("Enjeksiyon bulgusu gonderilemedi: " + exception.getMessage());
+        }
+    }
+
+    @Override
+    public void onCapability(JsonObject payload) {
+        reporter.log("Ajan yetenekleri: " + payload);
+    }
+
+    @Override
+    public void onEvent(String event, String key, JsonObject payload) {
+        String currentSession = sessionId;
+        String currentToken = sessionToken;
+        if (currentSession == null || currentToken == null) {
+            return;
+        }
+        try {
+            api.sendEvent(currentSession, currentToken, event, key, payload);
+            reporter.log("Olay gonderildi: " + event);
+        } catch (Exception exception) {
+            reporter.log("Olay gonderilemedi (" + event + "): " + exception.getMessage());
+        }
     }
 
     private void watchMinecraftProcess(MinecraftProcess minecraft) {
@@ -224,6 +299,10 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         ScheduledExecutorService currentScheduler = scheduler;
         if (currentScheduler != null) {
             currentScheduler.shutdownNow();
+        }
+        ScheduledExecutorService currentScanner = scannerScheduler;
+        if (currentScanner != null) {
+            currentScanner.shutdownNow();
         }
     }
 

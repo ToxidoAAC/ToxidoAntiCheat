@@ -1,0 +1,156 @@
+package dev.toxido.anticheat.agent;
+
+import java.lang.instrument.Instrumentation;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/** Faz 2: attack hook, fare korelasyonu ve enjeksiyon taramasi. */
+public final class Phase2 {
+    private static volatile VersionResolver.Target target;
+    private static volatile InputCollector input;
+    private static volatile AttackCorrelator correlator;
+    private static volatile InjectionScanner injection;
+    private static volatile String hookStatus = "off";
+    private static volatile String reason = "not_started";
+
+    private Phase2() {
+    }
+
+    public static void start(
+        Instrumentation instrumentation,
+        AgentClient client,
+        String versionHint
+    ) {
+        injection = new InjectionScanner(instrumentation, client);
+        injection.start();
+
+        Thread installer = new Thread(
+            () -> installWhenReady(instrumentation, client, versionHint),
+            "40x1d0AC-hook-install"
+        );
+        installer.setDaemon(true);
+        installer.start();
+    }
+
+    private static void installWhenReady(
+        Instrumentation instrumentation,
+        AgentClient client,
+        String versionHint
+    ) {
+        // Minecraft siniflari oyun acilirken gec yuklenir (genelde dunyaya
+        // girince). Tek seferlik cozumleme yerine hazir olana kadar bekle.
+        reason = "waiting_for_attack_class";
+        int attempts = 0;
+        while (true) {
+            VersionResolver.Target resolved = target;
+            if (resolved == null) {
+                resolved = VersionResolver.resolve(instrumentation, versionHint, false);
+                target = resolved;
+            }
+
+            if (resolved != null) {
+                if (installHook(instrumentation, resolved)) {
+                    startCollector(client, resolved);
+                }
+                return;
+            }
+
+            attempts++;
+            if (attempts == 30) {
+                AgentMain.log("Attack sinifi henuz yuklenmedi; beklemeye devam ediliyor.");
+            }
+            sleep(attempts < 30 ? 1000L : 5000L);
+        }
+    }
+
+    private static boolean installHook(
+        Instrumentation instrumentation,
+        VersionResolver.Target resolved
+    ) {
+        try {
+            AttackHook hook = new AttackHook(resolved);
+            instrumentation.addTransformer(hook, true);
+            instrumentation.retransformClasses(resolved.owner);
+            hookStatus = "active";
+            reason = "hooked";
+            AgentMain.log("Attack hook aktif: " + resolved.hook());
+            return true;
+        } catch (Throwable throwable) {
+            hookStatus = "off";
+            reason = "hook_failed";
+            AgentMain.log("Attack hook kurulamadi: " + throwable);
+            return false;
+        }
+    }
+
+    private static void startCollector(
+        AgentClient client,
+        VersionResolver.Target resolved
+    ) {
+        Path helper = helperPath();
+        AttackCorrelator[] holder = new AttackCorrelator[1];
+        InputCollector collector = new InputCollector(
+            helper,
+            event -> {
+                AttackCorrelator current = holder[0];
+                if (current != null) {
+                    current.onInput(event);
+                }
+            },
+            () -> client.sendCapability(capability())
+        );
+        correlator = new AttackCorrelator(resolved, collector, client::sendTrigger);
+        holder[0] = correlator;
+        input = collector;
+        HookBridge.setSink(correlator::onAttack);
+
+        if (!input.start()) {
+            reason = "input_helper_missing";
+            AgentMain.log("Fare yardimcisi baslatilamadi; triggerbot degraded.");
+        }
+        client.sendCapability(capability());
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public static void announce(AgentClient client) {
+        client.sendCapability(capability());
+    }
+
+    public static String capability() {
+        String trigger = "off";
+        if (target != null && "active".equals(hookStatus)) {
+            trigger = input != null && input.isReady() ? "active" : "degraded";
+        }
+        String inputStatus = input == null ? "missing" : (input.isReady() ? "ready" : "starting");
+        String version = target == null ? "unknown" : target.version;
+        String loader = target == null ? "unknown" : target.loader;
+        String hook = target == null ? "-" : target.hook();
+        String currentReason = reason;
+        return "{\"triggerbot\":" + Json.quote(trigger)
+            + ",\"injection\":" + Json.quote("active")
+            + ",\"version\":" + Json.quote(version)
+            + ",\"loader\":" + Json.quote(loader)
+            + ",\"hook\":" + Json.quote(hook)
+            + ",\"input\":" + Json.quote(inputStatus)
+            + ",\"reason\":" + Json.quote(currentReason) + "}";
+    }
+
+    private static Path helperPath() {
+        try {
+            java.net.URL location = Phase2.class.getProtectionDomain()
+                .getCodeSource().getLocation();
+            Path path = Path.of(location.toURI());
+            Path directory = Files.isDirectory(path) ? path : path.getParent();
+            return directory == null ? null : directory.resolve("40x1d0AC-input.exe");
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+}

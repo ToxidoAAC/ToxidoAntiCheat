@@ -227,6 +227,16 @@ async def end_session(payload: SessionEndRequest, request: Request) -> dict:
 
 @router.post("/event")
 async def session_event(payload: EventRequest, request: Request) -> dict:
-    await _authenticate(request, payload.session_id)
-    await _db(request).record_event(payload.session_id, payload.type, payload.payload)
-    return {"ok": True}
+    row = await _authenticate(request, payload.session_id)
+    inserted = await _db(request).record_event(
+        payload.session_id, payload.type, payload.payload, payload.event_key
+    )
+    if inserted and payload.type in {"injection", "triggerbot"}:
+        try:
+            await _channels(request).send_event_alert(
+                dict(row), payload.type, payload.payload or {}
+            )
+        except Exception:
+            # Uyari gonderilemese de olay kaydi korunur.
+            log.exception("Discord uyarisi gonderilemedi: %s", payload.type)
+    return {"ok": True, "recorded": inserted}

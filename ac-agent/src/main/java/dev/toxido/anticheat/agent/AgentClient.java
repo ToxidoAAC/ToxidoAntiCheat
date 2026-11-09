@@ -7,18 +7,21 @@ import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Ajan tarafindaki IPC istemcisi: uygulamanin actigi loopback portuna baglanir,
- * el sikismasi yapar ve duzenli kalp atisi gonderir.
+ * el sikismasi yapar, kalp atisi ve bulgu olaylari gonderir.
  */
 public final class AgentClient implements Runnable {
     private final int port;
     private final String token;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicInteger heartbeatStarted = new AtomicInteger(0);
+    private final Deque<String> pending = new ArrayDeque<>();
 
     private volatile BufferedWriter out;
 
@@ -49,7 +52,9 @@ public final class AgentClient implements Runnable {
                 if (line.contains("\"type\":\"ping\"")) {
                     send("{\"type\":\"pong\"}");
                 } else if (line.contains("\"type\":\"hello_ack\"")) {
+                    flushPending();
                     startHeartbeat();
+                    AgentMain.onConnected(this);
                 }
             }
         } catch (Exception exception) {
@@ -57,6 +62,50 @@ public final class AgentClient implements Runnable {
         } finally {
             running.set(false);
         }
+    }
+
+    public void sendCapability(String payloadJson) {
+        send("{\"type\":\"capability\",\"payload\":" + payloadJson + "}");
+    }
+
+    public void sendInjection(InjectionFinding finding) {
+        String payload = "{"
+            + "\"kind\":" + Json.quote(finding.kind)
+            + ",\"name\":" + Json.quote(finding.name)
+            + ",\"path\":" + Json.quote(finding.path)
+            + ",\"sha256\":" + Json.quote(finding.sha256)
+            + ",\"signature\":" + Json.quote(finding.signature)
+            + ",\"description\":" + Json.quote(finding.description)
+            + ",\"confidence\":" + Json.quote(finding.confidence)
+            + ",\"evidence\":" + Json.quote(finding.evidence)
+            + ",\"exists\":" + finding.exists
+            + ",\"deleted\":" + finding.deleted
+            + "}";
+        sendEvent("injection", finding.key, payload);
+    }
+
+    public void sendTrigger(TriggerEvent event) {
+        String payload = "{"
+            + "\"verdict\":" + Json.quote(event.verdict)
+            + ",\"reason\":" + Json.quote(event.reason)
+            + ",\"attack_time_ms\":" + event.attackTimeMs
+            + ",\"input_age_ms\":" + event.inputAgeMs
+            + ",\"physical_click\":" + event.physicalClick
+            + ",\"injected_click\":" + event.injectedClick
+            + ",\"raw_click\":" + event.rawClick
+            + ",\"target_type\":" + Json.quote(event.targetType)
+            + ",\"target_name\":" + Json.quote(event.targetName)
+            + ",\"target_uuid\":" + Json.quote(event.targetUuid)
+            + ",\"hook\":" + Json.quote(event.hook)
+            + ",\"evidence\":" + Json.quote(event.evidence)
+            + "}";
+        sendEvent("triggerbot", event.key, payload);
+    }
+
+    public void sendEvent(String event, String key, String payloadJson) {
+        send("{\"type\":\"event\",\"event\":" + Json.quote(event)
+            + ",\"key\":" + Json.quote(key)
+            + ",\"payload\":" + payloadJson + "}");
     }
 
     private Socket connect() {
@@ -71,9 +120,9 @@ public final class AgentClient implements Runnable {
     }
 
     private void sendHello() {
-        String hello = "{\"type\":\"hello\",\"token\":\"" + escape(token) + "\",\"pid\":"
-            + ProcessHandle.current().pid()
-            + ",\"agentVersion\":\"" + AgentMain.VERSION + "\"}";
+        String hello = "{\"type\":\"hello\",\"token\":" + Json.quote(token)
+            + ",\"pid\":" + ProcessHandle.current().pid()
+            + ",\"agentVersion\":" + Json.quote(AgentMain.VERSION) + "}";
         send(hello);
         AgentMain.log("El sikismasi gonderildi.");
     }
@@ -96,8 +145,21 @@ public final class AgentClient implements Runnable {
 
     private synchronized void send(String json) {
         if (out == null) {
+            if (pending.size() < 200) {
+                pending.addLast(json);
+            }
             return;
         }
+        writeLine(json);
+    }
+
+    private synchronized void flushPending() {
+        while (!pending.isEmpty() && out != null) {
+            writeLine(pending.removeFirst());
+        }
+    }
+
+    private void writeLine(String json) {
         try {
             out.write(json);
             out.newLine();
@@ -113,9 +175,5 @@ public final class AgentClient implements Runnable {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    private static String escape(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

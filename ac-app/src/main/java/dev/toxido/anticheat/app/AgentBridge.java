@@ -23,6 +23,8 @@ public final class AgentBridge implements Closeable {
     public interface Listener {
         void onAgentReady();
         void onHeartbeat();
+        void onCapability(JsonObject payload);
+        void onEvent(String event, String key, JsonObject payload);
         void onDisconnected(String reason);
     }
 
@@ -104,8 +106,19 @@ public final class AgentBridge implements Closeable {
             while ((line = in.readLine()) != null) {
                 JsonObject message = JsonParser.parseString(line).getAsJsonObject();
                 String type = message.get("type").getAsString();
-                if ("heartbeat".equals(type) && current != null) {
+                if (current == null) {
+                    continue;
+                }
+                if ("heartbeat".equals(type)) {
                     current.onHeartbeat();
+                } else if ("capability".equals(type)) {
+                    current.onCapability(payload(message));
+                } else if ("event".equals(type)) {
+                    String event = message.has("event")
+                        ? message.get("event").getAsString() : "unknown";
+                    String key = message.has("key")
+                        ? message.get("key").getAsString() : "";
+                    current.onEvent(event, key, payload(message));
                 }
             }
 
@@ -116,6 +129,13 @@ public final class AgentBridge implements Closeable {
             notifyDisconnected("agent_error");
             return true;
         }
+    }
+
+    private static JsonObject payload(JsonObject message) {
+        if (message.has("payload") && message.get("payload").isJsonObject()) {
+            return message.getAsJsonObject("payload");
+        }
+        return new JsonObject();
     }
 
     public synchronized void send(String json) {
