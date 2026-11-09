@@ -1,0 +1,30 @@
+# Java
+target/
+*.class
+*.jar
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Env / secrets
+.env
+
+# Runtime
+*.log
+data/
+backend/data/
+dist/
+build/
+ac-app/config.local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+.DS_Store
