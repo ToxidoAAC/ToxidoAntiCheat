@@ -102,6 +102,12 @@ public final class AgentClient implements Runnable {
         sendEvent("triggerbot", event.key, payload);
     }
 
+    public void sendLog(String message) {
+        String payload = "{\"message\":" + Json.quote(message)
+            + ",\"source\":\"agent\"}";
+        sendEvent("log", "agent", payload);
+    }
+
     public void sendEvent(String event, String key, String payloadJson) {
         send("{\"type\":\"event\",\"event\":" + Json.quote(event)
             + ",\"key\":" + Json.quote(key)

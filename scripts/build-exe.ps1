@@ -312,7 +312,7 @@ if (-not (Test-Path $dist)) {
 
 $cscArgs = @(
     '/nologo'
-    '/target:exe'
+    '/target:winexe'
     '/platform:x64'
     '/optimize+'
     "/win32icon:$iconPath"

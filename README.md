@@ -125,20 +125,12 @@ Dry-run modunda Discord'a istek gitmez; backend logunda `Now/testuser` ve
 oyun kapaninca `Log/testuser-<n>` gorunur. Oturum kayitlari
 `backend/data/toxido.db` icindedir.
 
-## Terminal arayuzu
+## Sessiz calisma
 
-`run-app.ps1` calistiginda terminalde blok `TOXIDO` logosu, iki yaninda zıt
-yonlerde donen yesil halkalar ve altinda yukaridan asagi akan Matrix kodlari
-gorunur. **Enter** ekrani kapatir; servis arka planda calismaya devam eder.
-Ekranda durum/log kalabaligi yoktur.
-
-Servis durumlari ve hatalar su dosyalara yazilir:
-
-| Dosya | Icerik |
-|---|---|
-| `%APPDATA%\40x1d0AC\ac.log` | Servis durumu, Minecraft/agent/API olaylari |
-| `%APPDATA%\40x1d0AC\launcher.log` | Splash'in servisi baslatma kaydi |
-| `%APPDATA%\40x1d0AC\service.out` | Arka plan servisinin stdout/stderr ciktisi |
+Uygulama terminal penceresi acmaz. `javaw.exe` ile arka planda baslar ve
+Minecraft kapanana kadar sessizce calisir. Splash, konsol ciktisi ve yerel
+log dosyasi yoktur; tum oturum ve tespit mesajlari Discord'daki oyuncu
+kanalina gonderilir.
 
 Ayni anda yalnizca bir servis calisir; ikinci baslatma `service.lock`
 tarafindan engellenir. Servis, Minecraft kapaninca kendiliginden durur.
@@ -147,11 +139,9 @@ Minecraft acik degilken baslatilirsa oyunu bekler. Elle durdurmak icin
 
 ### Masaustu baslatici
 
-Proje kokundeki `40x1d0AC.bat` terminal splash'ini baslatir. Cift tiklamak
-icin `Toxido Anti Cheat` kisayolu masaustune eklendi. Kisayol proje kokunu
-calisma dizini olarak kullanir; projeyi tasirsaniz kisayolu yeniden
-olusturmaniz gerekir. Baslatmadan once `mvn -B -DskipTests package` ile
-jar'larin derlenmis olmasi gerekir.
+Proje kokundeki `40x1d0AC.bat` gelistirme icin servisi sessiz baslatir.
+Dagitilan surumde `dist\40x1d0AC.exe` kullanilir. Baslatmadan once
+`mvn -B -DskipTests package` ile jar'larin derlenmis olmasi gerekir.
 
 ## Tek EXE (Windows)
 
@@ -181,27 +171,25 @@ java.logging,java.management` modulleriyle olusturur.
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
 Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.7**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.8**
 
 Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.7/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.8/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
-Komut dosyayi `%TEMP%` altina indirir, ayri bir terminalde baslatir ve komutun
-yazildigi terminali kapatir. Ilk calistirmada paket cikarilirken kisa bir
-`Toxido AC hazirlaniyor...` satiri gorunur; ardindan terminal splash acilir.
-**Enter** splash'i ve onun terminal penceresini kapatir; servis arka planda devam
-eder.
+Komut dosyayi `%TEMP%` altina indirir ve sessizce baslatir; terminal penceresi
+acilmaz. Ilk calistirmada paket cikarilirken kisa bir hazirlik suresi olabilir,
+ardindan servis arka planda devam eder.
 
 Notlar:
 
 - EXE imzalanmadigi icin Windows SmartScreen ilk acilista uyari gosterebilir:
   **More info -> Run anyway**.
 - `dist\40x1d0AC.exe` git'e eklenmez; her surumde yeniden uretilir.
-- Teshis icin `dist\40x1d0AC.exe --print-path` paketin cikarildigi dizini
-  yazdirir.
+- Windows Defender imzasiz paketi karantinaya alabilir; `dist` klasorunu
+  guvenilir konum olarak eklemek gerekebilir.
 - Backend'deki `/dl` yolu istege baglidir; kullanilirsa `DOWNLOAD_PATH`
   ayarindaki dosyayi sunar, ancak istemci dagitimi icin onerilmez.
 

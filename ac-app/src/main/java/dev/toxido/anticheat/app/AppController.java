@@ -48,6 +48,8 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private final Set<String> reportedStages = ConcurrentHashMap.newKeySet();
     private final List<JsonObject> capabilityHistory =
         Collections.synchronizedList(new ArrayList<>());
+    private final List<AgentEvent> pendingAgentEvents =
+        Collections.synchronizedList(new ArrayList<>());
     private final AtomicBoolean sessionReady = new AtomicBoolean(false);
     private final AtomicLong agentAttachedAt = new AtomicLong(0);
     private volatile String stageRunId;
@@ -124,6 +126,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         this.stageRunId = Long.toString(
             agentAttachedAt.get() > 0 ? agentAttachedAt.get() : System.currentTimeMillis()
         );
+        if (reporter instanceof LogReporter logReporter) {
+            logReporter.setSink(this::sendRemoteLog);
+        }
 
         startStageExecutor();
         emitStage(
@@ -132,6 +137,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             latestCapability()
         );
         flushCapabilityHistory();
+        flushPendingAgentEvents();
 
         reporter.status(
             "Oturum acik",
@@ -435,14 +441,60 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         String currentSession = sessionId;
         String currentToken = sessionToken;
         if (currentSession == null || currentToken == null) {
+            synchronized (pendingAgentEvents) {
+                if (pendingAgentEvents.size() < 200) {
+                    pendingAgentEvents.add(new AgentEvent(event, key, payload));
+                }
+            }
+            return;
+        }
+        sendAgentEvent(event, key, payload);
+    }
+
+    private void flushPendingAgentEvents() {
+        List<AgentEvent> pending;
+        synchronized (pendingAgentEvents) {
+            pending = new ArrayList<>(pendingAgentEvents);
+            pendingAgentEvents.clear();
+        }
+        for (AgentEvent event : pending) {
+            sendAgentEvent(event.event(), event.key(), event.payload());
+        }
+    }
+
+    private void sendAgentEvent(String event, String key, JsonObject payload) {
+        String currentSession = sessionId;
+        String currentToken = sessionToken;
+        if (currentSession == null || currentToken == null) {
             return;
         }
         try {
             api.sendEvent(currentSession, currentToken, event, key, payload);
-            reporter.log("Olay gonderildi: " + event);
+            if (!"log".equals(event)) {
+                reporter.log("Olay gonderildi: " + event);
+            }
         } catch (Exception exception) {
             reporter.log("Olay gonderilemedi (" + event + "): " + exception.getMessage());
         }
+    }
+
+    private void sendRemoteLog(String line) {
+        String currentSession = sessionId;
+        String currentToken = sessionToken;
+        if (currentSession == null || currentToken == null) {
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("message", line);
+        payload.addProperty("source", "app");
+        try {
+            api.sendEvent(currentSession, currentToken, "log", "app", payload);
+        } catch (Exception ignored) {
+            // Uzak log gonderimi servis akisini durdurmaz.
+        }
+    }
+
+    private record AgentEvent(String event, String key, JsonObject payload) {
     }
 
     private void watchMinecraftProcess(MinecraftProcess minecraft) {

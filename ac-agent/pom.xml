@@ -20,6 +20,14 @@
             <artifactId>asm</artifactId>
             <version>9.11.1</version>
         </dependency>
+        <!-- Minecraft 1.21.11 ile gelen Netty. Agent jar'ina paketlenmez;
+             siniflar oyun classloader'inda bulunur. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
+            <version>4.2.7.Final</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>

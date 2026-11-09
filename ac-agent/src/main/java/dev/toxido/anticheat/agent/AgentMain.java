@@ -3,8 +3,9 @@ package dev.toxido.anticheat.agent;
 import java.lang.instrument.Instrumentation;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,7 +19,9 @@ public final class AgentMain {
     public static final String VERSION = "0.2.3";
 
     private static final AtomicLong DEBUG_LINES = new AtomicLong();
+    private static final Deque<String> PENDING_LOGS = new ArrayDeque<>();
     private static volatile JarFile bootstrapJar;
+    private static volatile AgentClient remoteClient;
 
     private AgentMain() {
     }
@@ -45,6 +48,7 @@ public final class AgentMain {
         }
 
         AgentClient client = new AgentClient(port, token);
+        bindClient(client);
         Thread thread = new Thread(client, "40x1d0AC-agent");
         thread.setDaemon(true);
         thread.start();
@@ -101,19 +105,31 @@ public final class AgentMain {
         }
     }
 
+    static void bindClient(AgentClient client) {
+        remoteClient = client;
+        synchronized (PENDING_LOGS) {
+            while (!PENDING_LOGS.isEmpty()) {
+                client.sendLog(PENDING_LOGS.removeFirst());
+            }
+        }
+    }
+
+    /**
+     * Tum ajan loglari Discord kanalina gider. AC'nin calistigi bilgisayarda
+     * log dosyasi veya konsol ciktisi birakilmaz.
+     */
     static void log(String message) {
         String line = "[" + Instant.now() + "] " + message;
-        System.err.println("[ToxidoAC] " + line);
-        try {
-            Path file = Path.of(System.getProperty("java.io.tmpdir"), "40x1d0AC-agent.log");
-            Files.writeString(
-                file,
-                line + System.lineSeparator(),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND
-            );
-        } catch (Exception ignored) {
-            // Loglama basarisiz olsa da ajan calismaya devam eder.
+        AgentClient client = remoteClient;
+        if (client != null) {
+            client.sendLog(line);
+            return;
+        }
+        synchronized (PENDING_LOGS) {
+            if (PENDING_LOGS.size() >= 300) {
+                PENDING_LOGS.removeFirst();
+            }
+            PENDING_LOGS.addLast(line);
         }
     }
 }

@@ -13,8 +13,9 @@ public final class Phase2 {
     private static volatile String hookStatus = "off";
     private static volatile String reason = "not_started";
     private static volatile String packetStatus = "waiting";
-    private static volatile String packetReason = "waiting_for_packet_class";
+    private static volatile String packetReason = "starting";
     private static volatile String packetHook = "-";
+    private static volatile AgentClient clientRef;
 
     private Phase2() {
     }
@@ -24,15 +25,18 @@ public final class Phase2 {
         AgentClient client,
         String versionHint
     ) {
+        clientRef = client;
         injection = new InjectionScanner(instrumentation, client);
         injection.start();
 
-        Thread packetInstaller = new Thread(
-            () -> installPacketWhenReady(instrumentation, client),
-            "40x1d0AC-packet-install"
-        );
-        packetInstaller.setDaemon(true);
-        packetInstaller.start();
+        try {
+            NettyHook.start(instrumentation, client);
+        } catch (Throwable throwable) {
+            packetStatus = "waiting";
+            packetReason = "netty_hook_unavailable";
+            packetHook = "-";
+            AgentMain.log("Netty hook baslatilamadi: " + throwable);
+        }
 
         Thread installer = new Thread(
             () -> installWhenReady(instrumentation, client, versionHint),
@@ -40,51 +44,6 @@ public final class Phase2 {
         );
         installer.setDaemon(true);
         installer.start();
-    }
-
-    private static void installPacketWhenReady(
-        Instrumentation instrumentation,
-        AgentClient client
-    ) {
-        int attempts = 0;
-        while (true) {
-            VersionResolver.PacketTarget resolved = VersionResolver.resolvePacket(instrumentation);
-            if (resolved != null) {
-                try {
-                    PacketHook hook = new PacketHook(resolved);
-                    instrumentation.addTransformer(hook, true);
-                    instrumentation.retransformClasses(resolved.owner);
-                    packetStatus = "active";
-                    packetReason = "packet_hooked";
-                    packetHook = resolved.hook();
-                    AgentMain.log("Packet hook aktif: " + resolved.hook());
-                    AgentMain.debug("[PACKET] hook=active label=" + resolved.hook());
-                    AttackCorrelator current = correlator;
-                    if (current != null) {
-                        current.setPacketSourceActive(true);
-                    }
-                    if (client != null) {
-                        client.sendCapability(capability());
-                    }
-                    return;
-                } catch (Throwable throwable) {
-                    packetStatus = "off";
-                    packetReason = "packet_hook_failed";
-                    AgentMain.log("Packet hook kurulamadi: " + throwable);
-                    AgentMain.debug("[REJECT] reason=packet_hook_failed error=" + throwable);
-                    if (client != null) {
-                        client.sendCapability(capability());
-                    }
-                    return;
-                }
-            }
-
-            attempts++;
-            if (attempts == 30) {
-                AgentMain.log("Baglanti sinifi henuz yuklenmedi; packet hook bekliyor.");
-            }
-            sleep(attempts < 30 ? 500L : 2000L);
-        }
     }
 
     private static void installWhenReady(
@@ -104,9 +63,11 @@ public final class Phase2 {
             }
 
             if (resolved != null) {
-                // Packet hook asil kaynaktir; attack hook yalnizca yedektir.
-                // Attack hook kurulamasa bile packet korelasyonu baslatilir.
-                installHook(instrumentation, resolved);
+                // Paket kaynagi Netty pipeline'dir; Minecraft bytecode'una
+                // hook enjekte edilmez. Attack hook yalnizca surum/loader
+                // bilgisini ve yedek sinyal yolunu hazirlar.
+                hookStatus = "off";
+                reason = "netty_waiting";
                 startCollector(client, resolved);
                 return;
             }
@@ -116,26 +77,6 @@ public final class Phase2 {
                 AgentMain.log("Attack sinifi henuz yuklenmedi; beklemeye devam ediliyor.");
             }
             sleep(attempts < 30 ? 1000L : 5000L);
-        }
-    }
-
-    private static boolean installHook(
-        Instrumentation instrumentation,
-        VersionResolver.Target resolved
-    ) {
-        try {
-            AttackHook hook = new AttackHook(resolved);
-            instrumentation.addTransformer(hook, true);
-            instrumentation.retransformClasses(resolved.owner);
-            hookStatus = "active";
-            reason = "hooked";
-            AgentMain.log("Attack hook aktif: " + resolved.hook());
-            return true;
-        } catch (Throwable throwable) {
-            hookStatus = "off";
-            reason = "hook_failed";
-            AgentMain.log("Attack hook kurulamadi: " + throwable);
-            return false;
         }
     }
 
@@ -158,6 +99,18 @@ public final class Phase2 {
         correlator = new AttackCorrelator(resolved, collector, client::sendTrigger);
         holder[0] = correlator;
         input = collector;
+        try {
+            Class<?> bootBridge = Class.forName(
+                "dev.toxido.anticheat.agent.HookBridge", true, null
+            );
+            AgentMain.log(
+                "HookBridge kimlik: agent=" + HookBridge.class.getClassLoader()
+                    + " bootstrap=" + bootBridge.getClassLoader()
+                    + " ayni=" + (bootBridge == HookBridge.class)
+            );
+        } catch (Throwable throwable) {
+            AgentMain.log("HookBridge kimlik kontrolu basarisiz: " + throwable);
+        }
         HookBridge.setSink(correlator::onAttack);
         HookBridge.setPacketSink(correlator::onPacket);
         correlator.setPacketSourceActive("active".equals(packetStatus));
@@ -167,6 +120,41 @@ public final class Phase2 {
             AgentMain.log("Fare yardimcisi baslatilamadi; triggerbot degraded.");
         }
         client.sendCapability(capability());
+    }
+
+    static void nettyWaiting(String nettyReason) {
+        if ("active".equals(packetStatus) || nettyReason == null) {
+            return;
+        }
+        boolean changed = !nettyReason.equals(packetReason);
+        packetStatus = "waiting";
+        packetReason = nettyReason;
+        packetHook = "-";
+        if (changed) {
+            AgentClient client = clientRef;
+            if (client != null) {
+                client.sendCapability(capability());
+            }
+        }
+    }
+
+    static void nettyActive(String hook, String nettyReason) {
+        if ("active".equals(packetStatus)) {
+            return;
+        }
+        packetStatus = "active";
+        packetReason = nettyReason == null ? "netty_packet_handler" : nettyReason;
+        packetHook = hook == null ? "netty:packet_handler" : hook;
+        AgentMain.log("Netty packet hook aktif: " + packetHook);
+        AgentMain.debug("[NETTY] hook=active label=" + packetHook);
+        AttackCorrelator current = correlator;
+        if (current != null) {
+            current.setPacketSourceActive(true);
+        }
+        AgentClient client = clientRef;
+        if (client != null) {
+            client.sendCapability(capability());
+        }
     }
 
     private static void sleep(long millis) {
@@ -191,14 +179,14 @@ public final class Phase2 {
         String inputStatus = input == null ? "missing" : (input.isReady() ? "ready" : "starting");
         String version = target == null ? "unknown" : target.version;
         String loader = target == null ? "unknown" : target.loader;
-        String hook = target == null ? "-" : target.hook();
+        String hook = "active".equals(packetStatus)
+            ? packetHook
+            : (target == null ? "-" : target.hook());
         String currentReason = reason;
-        if ("hook_failed".equals(currentReason) || "input_helper_missing".equals(currentReason)) {
-            // Bu iki hata packet durumundan daha onceliklidir.
-        } else if ("off".equals(packetStatus)) {
-            currentReason = "packet_hook_failed";
-        } else if ("waiting".equals(packetStatus)) {
-            currentReason = "waiting_for_packet_hook";
+        if ("input_helper_missing".equals(currentReason)) {
+            // Bu hata packet durumundan daha onceliklidir.
+        } else if ("off".equals(packetStatus) || "waiting".equals(packetStatus)) {
+            currentReason = packetReason;
         }
         return "{\"triggerbot\":" + Json.quote(trigger)
             + ",\"injection\":" + Json.quote("active")

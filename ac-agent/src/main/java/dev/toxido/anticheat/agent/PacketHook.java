@@ -20,6 +20,7 @@ public final class PacketHook implements ClassFileTransformer {
     private final String methodDesc;
     private final String label;
     private final boolean instance;
+    private volatile boolean transformLogged;
 
     public PacketHook(VersionResolver.PacketTarget target) {
         this.ownerInternal = target.ownerName.replace('.', '/');
@@ -39,6 +40,10 @@ public final class PacketHook implements ClassFileTransformer {
     ) {
         if (!ownerInternal.equals(className)) {
             return null;
+        }
+        if (!transformLogged) {
+            transformLogged = true;
+            AgentMain.log("Packet hook transform cagrildi: " + className);
         }
 
         try {

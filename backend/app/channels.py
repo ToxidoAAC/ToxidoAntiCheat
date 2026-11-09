@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import discord
 
@@ -28,6 +31,7 @@ class ChannelManager:
         self.settings = settings
         self._fake_id = 900_000_000_000_000_000
         self._stage_boards: dict[str, dict] = {}
+        self._log_boards: dict[str, dict] = {}
 
     @property
     def enabled(self) -> bool:
@@ -66,7 +70,6 @@ class ChannelManager:
             topic=self._topic(session),
             reason="Toxido AC oturumu basladi",
         )
-        await channel.send(embed=self._start_embed(session))
         return channel.id, channel.name
 
     async def archive_session_channel(
@@ -106,7 +109,17 @@ class ChannelManager:
     def _drop_stage_boards(self, session_id: str) -> None:
         prefix = f"{session_id}:"
         for key in [key for key in self._stage_boards if key.startswith(prefix)]:
-            self._stage_boards.pop(key, None)
+            board = self._stage_boards.pop(key, None)
+            if board:
+                self._cancel_stage_timer(board)
+        self._log_boards.pop(session_id, None)
+
+    @staticmethod
+    def _cancel_stage_timer(board: dict) -> None:
+        timer = board.get("timer")
+        if timer is not None and not timer.done():
+            timer.cancel()
+        board["timer"] = None
 
     def _overwrites(self, guild: discord.Guild) -> dict:
         overwrites: dict = {
@@ -148,33 +161,6 @@ class ChannelManager:
         return " | ".join(parts)[:1024]
 
     @staticmethod
-    def _start_embed(session: dict) -> discord.Embed:
-        embed = discord.Embed(
-            title="🛡️ Toxido Anti Cheat",
-            description=(
-                "**Oturum başlatıldı**\n"
-                "Başlatma adımları tek mesajda güncellenecek."
-            ),
-            color=0x2ECC71,
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="👤 Oyuncu", value=f"`{session['mc_name']}`", inline=True)
-        embed.add_field(
-            name="🧩 Sürüm", value=f"`{session.get('mc_version') or '?'}`", inline=True
-        )
-        embed.add_field(
-            name="🤖 Ajan", value=f"`{session.get('agent_version') or '?'}`", inline=True
-        )
-        embed.add_field(
-            name="🆔 UUID", value=f"`{session.get('mc_uuid') or '?'}`", inline=False
-        )
-        embed.add_field(
-            name="💻 Cihaz", value=f"`{session.get('device_id') or '?'}`", inline=False
-        )
-        embed.set_footer(text=f"Toxido AC • Oturum: {session['id']}")
-        return embed
-
-    @staticmethod
     def _end_embed(session: dict, reason: str, new_name: str) -> discord.Embed:
         embed = discord.Embed(
             title="🔒 Oturum Kapandı",
@@ -191,7 +177,7 @@ class ChannelManager:
     async def send_event_alert(
         self, session: dict, event_type: str, payload: dict
     ) -> None:
-        if event_type not in {"injection", "triggerbot", "stage"}:
+        if event_type not in {"injection", "triggerbot", "stage", "log"}:
             return
         if not self.enabled:
             log.info("[DRY-RUN] %s uyarisi: %s", event_type, payload)
@@ -199,6 +185,9 @@ class ChannelManager:
 
         if event_type == "stage":
             await self._update_stage_board(session, payload)
+            return
+        if event_type == "log":
+            await self._update_log_board(session, payload)
             return
 
         guild = self.bot.get_guild(self.settings.guild_id)  # type: ignore[union-attr]
@@ -230,7 +219,14 @@ class ChannelManager:
         key = f"{session['id']}:{run_id}"
         board = self._stage_boards.get(key)
         if board is None:
-            board = {"message": None, "stages": {}, "total": 4, "latest": {}}
+            board = {
+                "message": None,
+                "stages": {},
+                "total": 4,
+                "latest": {},
+                "final": False,
+                "timer": None,
+            }
             self._stage_boards[key] = board
 
         try:
@@ -246,19 +242,112 @@ class ChannelManager:
         board["total"] = max(total, index)
         board["latest"].update(payload)
 
+        status = str(payload.get("status") or "").strip().lower()
+        complete = index >= total or status == "failed"
+
+        if complete:
+            self._cancel_stage_timer(board)
+            await self._send_stage_board(session, channel, board, final=True)
+            return
+
+        # Baslatma panosu tek mesaj olarak gonderilir. Tum asamalar
+        # tamamlanirsa hemen; uzun suren bir bekleme varsa 8 saniye
+        # sonra mevcut durumla bir kez gonderilir.
+        if board.get("message") is None and board.get("timer") is None:
+            board["timer"] = asyncio.create_task(
+                self._flush_stage_board_later(session, key, 8.0)
+            )
+
+    async def _flush_stage_board_later(
+        self, session: dict, key: str, delay: float
+    ) -> None:
+        await asyncio.sleep(delay)
+        board = self._stage_boards.get(key)
+        if board is None or board.get("message") is not None:
+            return
+        board["timer"] = None
+        guild = self.bot.get_guild(self.settings.guild_id)  # type: ignore[union-attr]
+        if guild is None:
+            return
+        channel_id = session.get("channel_id")
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if channel is None:
+            return
+        await self._send_stage_board(session, channel, board, final=False)
+
+    async def _send_stage_board(
+        self,
+        session: dict,
+        channel,
+        board: dict,
+        final: bool,
+    ) -> None:
         embed = self._stage_board_embed(session, board)
         message = board.get("message")
         if message is None:
             board["message"] = await channel.send(embed=embed)
+        elif final and not board.get("final"):
+            try:
+                await message.edit(embed=embed)
+            except discord.NotFound:
+                board["message"] = await channel.send(embed=embed)
+            except discord.HTTPException as exc:
+                log.warning("Asama mesaji duzenlenemedi: %s", exc)
+                return
+        if final:
+            board["final"] = True
+
+    async def _update_log_board(self, session: dict, payload: dict) -> None:
+        line = str(payload.get("message") or "").strip()
+        if not line:
             return
 
+        guild = self.bot.get_guild(self.settings.guild_id)  # type: ignore[union-attr]
+        if guild is None:
+            log.warning("Discord sunucusu bulunamadi: %s", self.settings.guild_id)
+            return
+
+        channel_id = session.get("channel_id")
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if channel is None:
+            log.warning("Log kanali bulunamadi: %s", channel_id)
+            return
+
+        board = self._log_boards.get(session["id"])
+        if board is None:
+            board = {"message": None, "lines": [], "last_edit": 0.0}
+            self._log_boards[session["id"]] = board
+
+        board["lines"].append(line[:400])
+        del board["lines"][:-10]
+
+        # Discord kanal basina rate limit uygular; loglari tek bir mesajda
+        # duzenleyip en fazla ~1.5 saniyede bir guncelle.
+        now = time.monotonic()
+        if board["message"] is not None and now - board["last_edit"] < 1.5:
+            return
+
+        description = "\n".join(f"> {item}" for item in board["lines"])[-4000:]
+        embed = discord.Embed(
+            title="📜 Canlı Günlük",
+            description=description,
+            color=0x3498DB,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text=f"Toxido AC • {session.get('mc_name') or '?'}")
+
+        message = board.get("message")
         try:
-            await message.edit(embed=embed)
+            if message is None:
+                board["message"] = await channel.send(embed=embed)
+            else:
+                await message.edit(embed=embed)
         except discord.NotFound:
-            # Kanalda mesaj silinmisse tek bir yeni mesaj olustur.
             board["message"] = await channel.send(embed=embed)
         except discord.HTTPException as exc:
-            log.warning("Asama mesaji duzenlenemedi: %s", exc)
+            log.warning("Log mesaji duzenlenemedi: %s", exc)
+            return
+        board["last_edit"] = now
 
     @staticmethod
     def _stage_board_embed(session: dict, board: dict) -> discord.Embed:
@@ -380,6 +469,11 @@ class ChannelManager:
             inline=True,
         )
         embed.add_field(
+            name="🧪 Sebep",
+            value=f"`{latest.get('packet_reason') or latest.get('reason') or '-'}`",
+            inline=True,
+        )
+        embed.add_field(
             name="🖱️ Input",
             value=f"`{latest.get('input') or 'starting'}`",
             inline=True,
@@ -389,11 +483,6 @@ class ChannelManager:
             value=f"`{latest.get('triggerbot') or 'off'}`",
             inline=True,
         )
-        reason = latest.get("reason")
-        if reason:
-            embed.add_field(
-                name="ℹ️ Sebep", value=f"`{_clip(str(reason), 200)}`", inline=True
-            )
         embed.set_footer(
             text=f"Toxido AC • Oturum: {session['id']} • Son güncelleme"
         )
@@ -444,50 +533,61 @@ class ChannelManager:
         else:
             embed = discord.Embed(
                 title="🚨 TriggerBot Tespiti",
-                description="**Fiziksel olmayan attack davranışı**",
-                color=0xE74C3C,
+                description=(
+                    "**Attack davranışı tespit edildi**\n"
+                    "Toxido AC, fiziksel olmayan bir saldırı davranışı kaydetti."
+                ),
+                color=0xED4245,
                 timestamp=datetime.now(timezone.utc),
             )
             embed.add_field(
                 name="👤 Oyuncu", value=f"`{session['mc_name']}`", inline=True
             )
             embed.add_field(
-                name="⚖️ Sonuç",
-                value=f"`{payload.get('verdict', '?')}`",
-                inline=True,
-            )
-            embed.add_field(
                 name="🎯 Hedef",
                 value=f"`{payload.get('target_name') or payload.get('target_type') or '?'}`",
                 inline=True,
             )
+            embed.add_field(name="⚡ Sonuç", value="`TriggerBot`", inline=True)
             embed.add_field(
-                name="🖱️ Fiziksel tık",
-                value=f"`{payload.get('physical_click', False)}`",
+                name="🪝 Hook",
+                value=f"`{payload.get('hook') or '-'}`",
                 inline=True,
             )
             embed.add_field(
-                name="💉 Injected tık",
-                value=f"`{payload.get('injected_click', False)}`",
+                name="🧪 Sebep",
+                value=f"`{payload.get('reason') or '-'}`",
                 inline=True,
             )
+            age = payload.get("input_age_ms")
+            try:
+                age_value = int(age) if age is not None else None
+            except (TypeError, ValueError):
+                age_value = None
+            if age_value is not None and age_value >= 0:
+                embed.add_field(
+                    name="⏱️ Tık yaşı", value=f"`{age_value} ms`", inline=True
+                )
             embed.add_field(
-                name="⏱️ Tık yaşı",
-                value=f"`{payload.get('input_age_ms', '?')} ms`",
-                inline=True,
+                name="🔎 Girdi analizi",
+                value=(
+                    f"Fiziksel tık: `{payload.get('physical_click', False)}`\n"
+                    f"Injected tık: `{payload.get('injected_click', False)}`"
+                ),
+                inline=False,
             )
-            for key, label in (
-                ("hook", "Hook"),
-                ("reason", "Sebep"),
-                ("evidence", "Kanit"),
-            ):
-                value = payload.get(key)
-                if value:
-                    embed.add_field(
-                        name=label, value=_clip(str(value)), inline=False
-                    )
+            evidence = payload.get("evidence")
+            if evidence:
+                embed.add_field(
+                    name="📌 Kanıt", value=_clip(str(evidence)), inline=False
+                )
+            avatar = session.get("mc_uuid") or session.get("mc_name")
+            if avatar:
+                embed.set_thumbnail(
+                    url=f"https://mc-heads.net/avatar/{quote(str(avatar))}/128"
+                )
 
-        embed.set_footer(text=f"Oturum: {session['id']}")
+        embed.set_footer(text=f"Toxido AC • Oturum: {session['id']}")
         return embed
 
 

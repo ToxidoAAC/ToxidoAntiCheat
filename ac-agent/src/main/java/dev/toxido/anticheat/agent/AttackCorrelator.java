@@ -1,9 +1,12 @@
 package dev.toxido.anticheat.agent;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -21,10 +24,14 @@ public final class AttackCorrelator {
     private static final long WINDOW_BEFORE_MS = 300;
     private static final long WINDOW_AFTER_MS = 50;
     private static final long REPORT_BUCKET_MS = 500;
+    private static final boolean TEST_UNFILTERED = Files.isRegularFile(
+        Path.of(System.getProperty("java.io.tmpdir"), "40x1d0AC-unfiltered.flag")
+    );
 
     private final Deque<InputEvent> lowDowns = new ArrayDeque<>();
     private final Deque<InputEvent> rawDowns = new ArrayDeque<>();
     private final Map<String, Long> reported = new ConcurrentHashMap<>();
+    private final Set<String> seenPackets = ConcurrentHashMap.newKeySet();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "40x1d0AC-trigger");
         thread.setDaemon(true);
@@ -104,8 +111,31 @@ public final class AttackCorrelator {
 
     /** ClientConnection.send icinden gelen ham packet (asil kaynak). */
     public void onPacket(Object packet, String hook) {
+        if (packet == null) {
+            return;
+        }
+
+        // Hook'un gercekten calistigini kanitlamak icin ilk farkli paket
+        // siniflarini logla. Normalde sadece attack paketleri loglanir.
+        String packetClass = packet.getClass().getName();
+        if (seenPackets.size() < 40 && seenPackets.add(packetClass)) {
+            AgentMain.debug("[PACKET] seen class=" + packetClass + " hook=" + hook);
+        }
+
         PacketAttack.Result result = PacketAttack.resolve(packet);
         if (!result.attack) {
+            String simple = packetClass
+                .substring(packetClass.lastIndexOf('.') + 1)
+                .toLowerCase(Locale.ROOT);
+            if ("net.minecraft.class_2824".equals(packetClass)
+                || simple.contains("serverboundinteractpacket")
+                || simple.contains("playerinteractentityc2spacket")) {
+                AgentMain.debug(
+                    "[PACKET] candidate class=" + packetClass
+                        + " attack=false entity=" + result.entityId
+                        + " hook=" + hook
+                );
+            }
             return;
         }
 
@@ -130,13 +160,22 @@ public final class AttackCorrelator {
     }
 
     private void evaluate(AttackEvent attack, String source) {
+        boolean unfiltered = TEST_UNFILTERED;
         try {
             if (!input.isReady()) {
                 AgentMain.debug("[REJECT] reason=input_not_ready source=" + source);
-                return;
+                if (!unfiltered) {
+                    return;
+                }
             }
 
             GameState state = GameState.inspect(target, attack.target);
+            if (unfiltered) {
+                AgentMain.debug(
+                    "[TEST] filters bypassed source=" + source
+                        + " target=" + state.targetName
+                );
+            }
             String stateText = "screen=" + state.screenOpen
                 + " key=" + state.attackKeyPressed
                 + " living=" + state.targetLiving
@@ -144,7 +183,7 @@ public final class AttackCorrelator {
                 + " armorstand=" + state.targetArmorStand
                 + " tablist=" + state.targetInTabList;
 
-            if (!state.reliable) {
+            if (!state.reliable && !unfiltered) {
                 if (!capabilityDegradedLogged) {
                     capabilityDegradedLogged = true;
                     AgentMain.log("Oyun durumu guvenilir degil; triggerbot raporu kapali.");
@@ -153,22 +192,22 @@ public final class AttackCorrelator {
                 return;
             }
 
-            if (state.screenOpen) {
+            if (state.screenOpen && !unfiltered) {
                 AgentMain.debug("[REJECT] reason=screen_open source=" + source
                     + " target=" + state.targetName);
                 return;
             }
-            if (!state.targetLiving) {
+            if (!state.targetLiving && !unfiltered) {
                 AgentMain.debug("[REJECT] reason=non_living source=" + source
                     + " target=" + state.targetName);
                 return;
             }
-            if (state.targetArmorStand) {
+            if (state.targetArmorStand && !unfiltered) {
                 AgentMain.debug("[REJECT] reason=armor_stand source=" + source
                     + " target=" + state.targetName);
                 return;
             }
-            if (state.targetPlayer && !state.targetInTabList) {
+            if (state.targetPlayer && !state.targetInTabList && !unfiltered) {
                 AgentMain.debug("[REJECT] reason=plugin_npc source=" + source
                     + " target=" + state.targetName);
                 return;
@@ -187,7 +226,7 @@ public final class AttackCorrelator {
 
             if (injectedHeld) {
                 report(
-                    "External TriggerBot",
+                    "TriggerBot",
                     "injected_hold",
                     attack,
                     source,
@@ -247,7 +286,7 @@ public final class AttackCorrelator {
 
             if (injected != null) {
                 report(
-                    "External TriggerBot",
+                    "TriggerBot",
                     "injected_only",
                     attack,
                     source,
@@ -262,12 +301,18 @@ public final class AttackCorrelator {
 
             // Raw input var ama LL click yok: enjekte mi fiziksel mi belirsiz.
             // Yanlis pozitif uretmemek icin fail-closed davran.
-            if (rawAny || rawHeld) {
+            if ((rawAny || rawHeld) && !unfiltered) {
                 AgentMain.debug(
                     "[REJECT] reason=raw_only_ambiguous source=" + source
                         + " target=" + state.targetName
                 );
                 return;
+            }
+            if ((rawAny || rawHeld) && unfiltered) {
+                AgentMain.debug(
+                    "[TEST] raw_only bypassed source=" + source
+                        + " target=" + state.targetName
+                );
             }
 
             if (input.isControllerDown()) {
@@ -287,7 +332,7 @@ public final class AttackCorrelator {
             }
 
             report(
-                "Un-External TriggerBot",
+                "TriggerBot",
                 "no_physical_click",
                 attack,
                 source,
