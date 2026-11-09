@@ -148,11 +148,14 @@ java.logging,java.management` modulleriyle olusturur.
 ### Tek komutla indirme ve calistirma
 
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
-Istemciyi GitHub Releases veya benzeri bir dosya sunucusunda yayinlayin.
-Ornek Windows cmd komutu:
+Istemci GitHub Releases uzerinden yayinlanir:
+
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.0**
+
+Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/<kullanici>/<repo>/releases/download/v1/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.0/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
 ```
 
 Komut dosyayi `%TEMP%` altina indirir ve calistirir. Ilk calistirmada paket

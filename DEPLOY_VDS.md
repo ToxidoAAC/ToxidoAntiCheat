@@ -134,13 +134,14 @@ $env:AC_API_SECRET = "..."
 ## 7. Tek EXE dagitimi
 
 **ToxidoAC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
-botunu calistirir. Istemciyi GitHub Releases veya benzeri bir dosya
-sunucusunda yayinlayin.
+botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
-Ornek tek komut:
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.0**
+
+Tek komut:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/<kullanici>/<repo>/releases/download/v1/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.0/ToxidoAC.exe -OutFile $env:TEMP\ToxidoAC.exe; & $env:TEMP\ToxidoAC.exe"
 ```
 
 Backend'deki `/dl` ve `/download/ToxidoAC.exe` yollari istege baglidir. VDS'te
