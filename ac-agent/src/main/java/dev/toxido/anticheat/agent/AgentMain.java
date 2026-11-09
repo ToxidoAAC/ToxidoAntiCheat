@@ -14,7 +14,7 @@ import java.util.jar.JarFile;
  * Mod degildir; Fabric/Forge/NeoForge gerektirmez.
  */
 public final class AgentMain {
-    public static final String VERSION = "0.2.0";
+    public static final String VERSION = "0.2.1";
 
     private static volatile JarFile bootstrapJar;
 

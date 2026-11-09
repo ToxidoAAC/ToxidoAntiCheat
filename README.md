@@ -181,12 +181,12 @@ java.logging,java.management` modulleriyle olusturur.
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
 Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.5**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.6**
 
 Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.5/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.6/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
 Komut dosyayi `%TEMP%` altina indirir, ayri bir terminalde baslatir ve komutun
@@ -223,7 +223,15 @@ HOST=127.0.0.1
 PORT=8000
 DRY_RUN=0
 HEARTBEAT_TIMEOUT_SECONDS=120
+INJECTION_ALERTS=1
+INJECTION_ALERT_KINDS=jvm_argument,mod_file,cheat_signature,external_agent
+INJECTION_MIN_CONFIDENCE=high
 ```
+
+`INJECTION_ALERT_KINDS` yalnizca listelenen yuksek guvenli bulgu turlerini
+Discord'a gonderir; `loaded_class` ve `class_source` gibi orta guvenli
+bulgular varsayilan olarak filtrelenir. TriggerBot uyarilari bu filtreden
+etkilenmez.
 
 Bot izinleri: **Manage Channels, Send Messages, Read Message History, View
 Channels**. Kanal izin overwrite'lari 403 verirse bot rolune **Manage Roles**

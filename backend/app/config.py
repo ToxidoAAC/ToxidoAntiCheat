@@ -28,6 +28,11 @@ def _bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _csv(name: str, default: str) -> frozenset[str]:
+    raw = os.getenv(name, "").strip() or default
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     discord_token: str
@@ -44,6 +49,9 @@ class Settings:
     port: int
     dry_run: bool
     heartbeat_timeout_seconds: int
+    injection_alerts: bool
+    injection_alert_kinds: frozenset[str]
+    injection_min_confidence: str
 
     @property
     def discord_configured(self) -> bool:
@@ -106,4 +114,12 @@ def get_settings() -> Settings:
         port=port,
         dry_run=_bool("DRY_RUN", True),
         heartbeat_timeout_seconds=_int("HEARTBEAT_TIMEOUT_SECONDS", 120),
+        injection_alerts=_bool("INJECTION_ALERTS", True),
+        injection_alert_kinds=_csv(
+            "INJECTION_ALERT_KINDS",
+            "jvm_argument,mod_file,cheat_signature,external_agent",
+        ),
+        injection_min_confidence=(
+            os.getenv("INJECTION_MIN_CONFIDENCE", "high").strip().lower() or "high"
+        ),
     )

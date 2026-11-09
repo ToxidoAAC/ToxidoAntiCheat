@@ -47,6 +47,9 @@ HOST=0.0.0.0
 PORT=25364
 DRY_RUN=0
 HEARTBEAT_TIMEOUT_SECONDS=120
+INJECTION_ALERTS=1
+INJECTION_ALERT_KINDS=jvm_argument,mod_file,cheat_signature,external_agent
+INJECTION_MIN_CONFIDENCE=high
 ```
 
 - Panel `SERVER_PORT` veriyorsa backend onu `PORT` degerine tercih eder.
@@ -93,12 +96,14 @@ Invoke-RestMethod http://65.108.39.249:25364/health
 Beklenen cevap:
 
 ```json
-{"ok":true,"version":"0.2.1","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"heartbeat_timeout_seconds":120}
+{"ok":true,"version":"0.2.2","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"alert_filtered":0,"heartbeat_timeout_seconds":120,"injection_alerts":true,"injection_alert_kinds":["cheat_signature","external_agent","jvm_argument","mod_file"],"injection_min_confidence":"high"}
 ```
 
 `alert_queue` Discord uyarilarinin bekleyen sayisidir; `alert_dropped`
 kuyruk doldugu icin gonderilemeyen uyari sayisidir. Normalde `alert_dropped`
-artmamalidir.
+artmamalidir. `alert_filtered` ise dusuk/orta guvenli veya izin verilmeyen
+turdeki enjeksiyon bulgularinin Discord'a gonderilmeden filtrelendigi sayidir;
+triggerbot uyarilari bu filtreden etkilenmez.
 
 Baglanti kurulamazsa:
 
@@ -143,12 +148,12 @@ $env:AC_API_SECRET = "..."
 **40x1d0AC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
 botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.5**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.6**
 
 Tek komut:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.5/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.6/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
 Backend'deki `/dl` ve `/download/40x1d0AC.exe` yollari istege baglidir. VDS'te

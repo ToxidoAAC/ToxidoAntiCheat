@@ -27,7 +27,7 @@ public final class Config {
         this.heartbeatIntervalMs = intValue(properties, "heartbeat.intervalMs", 5000);
         this.agentTimeoutMs = intValue(properties, "agent.timeoutMs", 20000);
         this.attachTimeoutMs = intValue(properties, "attach.timeoutMs", 15000);
-        this.agentVersion = properties.getProperty("agent.version", "0.2.0");
+        this.agentVersion = properties.getProperty("agent.version", "0.2.1");
         this.agentJar = properties.getProperty("agent.jar", "").trim();
         this.deviceId = deviceId;
     }

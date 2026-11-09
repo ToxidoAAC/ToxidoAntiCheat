@@ -122,7 +122,7 @@ if (-not $NoObfuscate) {
     Copy-Item $skidConfig $skidConfigLocal -Force
     Push-Location $obfuscation
     try {
-        & $java -Xmx2g -jar $SkidJar obfuscate `
+        & $java -Xmx1g -jar $SkidJar obfuscate `
             (Join-Path $obfuscation 'ac-app.jar') `
             "--config=$skidConfigLocal" `
             "--output=$obfuscatedAppJar" `
@@ -130,7 +130,7 @@ if (-not $NoObfuscate) {
         if ($LASTEXITCODE -ne 0) {
             throw "Skidfuscator (app) basarisiz (exit $LASTEXITCODE)."
         }
-        & $java -Xmx2g -jar $SkidJar obfuscate `
+        & $java -Xmx1g -jar $SkidJar obfuscate `
             (Join-Path $obfuscation 'ac-agent.jar') `
             "--config=$skidConfigLocal" `
             "--output=$obfuscatedAgentJar" `

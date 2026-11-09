@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
         await database.close()
 
 
-app = FastAPI(title="Toxido Anti Cheat API", version="0.2.1", lifespan=lifespan)
+app = FastAPI(title="Toxido Anti Cheat API", version="0.2.2", lifespan=lifespan)
 app.include_router(router)
 
 
@@ -154,7 +154,11 @@ async def health() -> dict:
         "active_sessions": len(active),
         "alert_queue": alerts.pending,
         "alert_dropped": alerts.dropped,
+        "alert_filtered": alerts.filtered,
         "heartbeat_timeout_seconds": state.settings.heartbeat_timeout_seconds,
+        "injection_alerts": state.settings.injection_alerts,
+        "injection_alert_kinds": sorted(state.settings.injection_alert_kinds),
+        "injection_min_confidence": state.settings.injection_min_confidence,
     }
 
 

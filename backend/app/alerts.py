@@ -29,6 +29,7 @@ class EventAlertQueue:
         self._queue: asyncio.Queue[AlertItem] = asyncio.Queue(maxsize=maxsize)
         self._worker: asyncio.Task[None] | None = None
         self._dropped = 0
+        self._filtered = 0
 
     @property
     def pending(self) -> int:
@@ -37,6 +38,15 @@ class EventAlertQueue:
     @property
     def dropped(self) -> int:
         return self._dropped
+
+    @property
+    def filtered(self) -> int:
+        return self._filtered
+
+    def record_filtered(self, reason: str) -> None:
+        """Dusuk onemli bulgulari Discord'a gondermeden say."""
+        self._filtered += 1
+        log.debug("Enjeksiyon uyarisi filtrelendi: %s (toplam=%s)", reason, self._filtered)
 
     def start(self) -> None:
         if self._worker is not None:
@@ -86,7 +96,8 @@ class EventAlertQueue:
         except asyncio.CancelledError:
             pass
         log.info(
-            "Discord uyari kuyrugu durdu (bekleyen=%s, atilan=%s)",
+            "Discord uyari kuyrugu durdu (bekleyen=%s, atilan=%s, filtrelenen=%s)",
             self.pending,
             self._dropped,
+            self._filtered,
         )

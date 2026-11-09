@@ -42,6 +42,38 @@ def _alerts(request: Request):
     return request.app.state.alerts
 
 
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _should_enqueue_alert(
+    request: Request, event_type: str, payload: dict
+) -> tuple[bool, str]:
+    """Discord'a gidecek event'leri tur ve guven seviyesine gore filtrele.
+
+    TriggerBot her zaman gonderilir. Enjeksiyon bulgulari varsayilan olarak
+    yalnizca yuksek guvenli ve bilinen turlerde Discord'a gider; boylece
+    modlu istemcilerdeki sinif/path yanlis pozitifleri kanali doldurmaz.
+    """
+    if event_type == "triggerbot":
+        return True, ""
+
+    settings = request.app.state.settings
+    if event_type != "injection":
+        return False, f"type:{event_type}"
+    if not settings.injection_alerts:
+        return False, "disabled"
+
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind not in settings.injection_alert_kinds:
+        return False, f"kind:{kind or '-'}"
+
+    confidence = str(payload.get("confidence") or "").strip().lower()
+    minimum = settings.injection_min_confidence
+    if _CONFIDENCE_RANK.get(confidence, -1) < _CONFIDENCE_RANK.get(minimum, 2):
+        return False, f"confidence:{confidence or '-'}"
+    return True, ""
+
+
 async def _authenticate(request: Request, session_id: str):
     database = _db(request)
     row = await database.get_session(session_id)
@@ -244,10 +276,22 @@ async def session_event(payload: EventRequest, request: Request) -> dict:
         payload.session_id, payload.type, payload.payload, payload.event_key
     )
     queued = False
+    filtered = False
     if inserted and payload.type in {"injection", "triggerbot"}:
-        # Discord rate limit'i /event yanitini bekletmesin; embed arka planda
-        # gonderilir. Olay kaydi her durumda korunur.
-        queued = _alerts(request).enqueue(
-            dict(row), payload.type, payload.payload or {}
-        )
-    return {"ok": True, "recorded": inserted, "alert_queued": queued}
+        event_payload = payload.payload or {}
+        send, reason = _should_enqueue_alert(request, payload.type, event_payload)
+        if send:
+            # Discord rate limit'i /event yanitini bekletmesin; embed arka
+            # planda gonderilir. Olay kaydi her durumda korunur.
+            queued = _alerts(request).enqueue(
+                dict(row), payload.type, event_payload
+            )
+        else:
+            filtered = True
+            _alerts(request).record_filtered(reason)
+    return {
+        "ok": True,
+        "recorded": inserted,
+        "alert_queued": queued,
+        "alert_filtered": filtered,
+    }
