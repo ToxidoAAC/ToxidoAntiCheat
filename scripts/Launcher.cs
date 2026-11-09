@@ -25,15 +25,28 @@ internal static class Program
             string app = Path.Combine(engine, "app", "ac-app.jar");
             string config = Path.Combine(engine, "app", "client.properties");
             string agent = Path.Combine(engine, "app", "ac-agent.jar");
+            string hook = Path.Combine(engine, "app", "ac-agent-hook.jar");
+            string input = Path.Combine(engine, "app", "40x1d0AC-input.exe");
 
             if (!File.Exists(java) || !File.Exists(app)
-                || !File.Exists(config) || !File.Exists(agent))
+                || !File.Exists(config) || !File.Exists(agent)
+                || !File.Exists(hook) || !File.Exists(input))
             {
                 engine = Extract(engine);
                 java = Path.Combine(engine, "runtime", "bin", "java.exe");
                 app = Path.Combine(engine, "app", "ac-app.jar");
                 config = Path.Combine(engine, "app", "client.properties");
                 agent = Path.Combine(engine, "app", "ac-agent.jar");
+                hook = Path.Combine(engine, "app", "ac-agent-hook.jar");
+                input = Path.Combine(engine, "app", "40x1d0AC-input.exe");
+            }
+
+            Validate(engine, java, app, config, agent, hook, input);
+
+            if (args.Length > 0 && args[0] == "--diagnose")
+            {
+                Diagnose(engine, java, app, config, agent, hook, input);
+                return 0;
             }
 
             if (args.Length > 0 && args[0] == "--print-path")
@@ -85,6 +98,59 @@ internal static class Program
                 // Konsol yoksa sessizce cik.
             }
             return 1;
+        }
+    }
+
+    private static void Validate(string engine, params string[] files)
+    {
+        Log("Engine: " + engine);
+        foreach (string path in files)
+        {
+            FileInfo info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                throw new Exception(
+                    "Gerekli dosya eksik: " + path
+                    + ". Antivirus karantinasi veya bozuk paket olabilir.");
+            }
+            Log("Dosya: " + path + " (" + info.Length + " bayt)");
+        }
+    }
+
+    private static void Diagnose(
+        string engine,
+        string java,
+        string app,
+        string config,
+        string agent,
+        string hook,
+        string input)
+    {
+        StringBuilder report = new StringBuilder();
+        report.AppendLine("Toxido AC teshis");
+        report.AppendLine("Engine: " + engine);
+        foreach (string path in new[] { java, app, config, agent, hook, input })
+        {
+            FileInfo info = new FileInfo(path);
+            report.AppendLine(
+                (info.Exists ? "OK   " : "EKSIK") + " " + path
+                + (info.Exists ? " (" + info.Length + " bayt)" : ""));
+        }
+        report.AppendLine("Java: " + java);
+        string output = report.ToString();
+        Console.WriteLine(output);
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "40x1d0AC",
+                "diagnose.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, output, Encoding.UTF8);
+        }
+        catch
+        {
+            // Teshis dosyasi yazilamazsa konsol ciktisi yeterli.
         }
     }
 

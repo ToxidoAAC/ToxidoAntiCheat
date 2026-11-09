@@ -264,6 +264,25 @@ if ($hookEntries -match 'AgentMain|AgentClient|Phase2') {
 $payloadId = [Guid]::NewGuid().ToString('N')
 Set-Content -Path (Join-Path $stage 'payload.id') -Value $payloadId -Encoding ASCII -NoNewline
 
+$requiredPayload = @(
+    (Join-Path $runtime 'bin\java.exe'),
+    (Join-Path $appDir 'ac-app.jar'),
+    (Join-Path $appDir 'ac-agent.jar'),
+    (Join-Path $appDir 'ac-agent-hook.jar'),
+    (Join-Path $appDir '40x1d0AC-input.exe'),
+    (Join-Path $appDir 'client.properties')
+)
+foreach ($required in $requiredPayload) {
+    if (-not (Test-Path $required)) {
+        throw "Payload eksik: $required"
+    }
+    $item = Get-Item $required
+    Write-Output ("Payload dosyasi: {0} ({1} bayt)" -f $item.FullName, $item.Length)
+}
+if ((Get-Content (Join-Path $appDir 'client.properties') -Raw) -notmatch '(?m)^agent\.version=0\.2\.3\s*$') {
+    throw 'client.properties agent.version 0.2.3 degil.'
+}
+
 Write-Output 'Paket sikistiriliyor...'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory(

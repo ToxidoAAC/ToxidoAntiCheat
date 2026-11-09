@@ -1,5 +1,6 @@
 package dev.toxido.anticheat.agent;
 
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -9,6 +10,7 @@ import java.util.function.Consumer;
  */
 public final class HookBridge {
     private static volatile Consumer<AttackEvent> sink;
+    private static volatile BiConsumer<Object, String> packetSink;
 
     private HookBridge() {
     }
@@ -17,10 +19,21 @@ public final class HookBridge {
         sink = newSink;
     }
 
+    public static void setPacketSink(BiConsumer<Object, String> newSink) {
+        packetSink = newSink;
+    }
+
     public static void onAttack(Object player, Object target, String hook) {
         Consumer<AttackEvent> current = sink;
         if (current != null && player != null && target != null) {
             current.accept(new AttackEvent(System.currentTimeMillis(), player, target, hook));
+        }
+    }
+
+    public static void onPacket(Object packet, String hook) {
+        BiConsumer<Object, String> current = packetSink;
+        if (current != null && packet != null) {
+            current.accept(packet, hook);
         }
     }
 }

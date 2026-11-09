@@ -285,23 +285,39 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         String reason = text(capability, "reason");
         String triggerbot = text(capability, "triggerbot");
         String hook = text(capability, "hook");
+        String packet = text(capability, "packet");
+        String packetReason = text(capability, "packet_reason");
         String input = text(capability, "input");
         boolean hookInstalled = !hook.isBlank() && !"-".equals(hook);
+        boolean packetActive = "active".equals(packet);
+        boolean packetFailed = "off".equals(packet) || "packet_hook_failed".equals(packetReason);
 
-        if ("hook_failed".equals(reason)) {
+        if ("hook_failed".equals(reason) && !packetActive) {
             emitStage("hook_failed", 3, 4, "Attack hook kurulamadi", "failed",
                 timestamp, capability);
             return;
         }
 
-        if (!hookInstalled && ("waiting_for_attack_class".equals(reason)
-            || ("off".equals(triggerbot) && "missing".equals(input)))) {
-            emitStage("hook_waiting", 2, 4, "Attack sinifi bekleniyor", "waiting",
+        if (packetFailed) {
+            emitStage("packet_failed", 3, 4, "Packet hook kurulamadi", "failed",
+                timestamp, capability);
+            emitStage("packet_failed_trigger", 4, 4, "TriggerBot devre disi", "failed",
                 timestamp, capability);
             return;
         }
 
-        if (hookInstalled) {
+        if ("waiting".equals(packet) || (!packetActive && !hookInstalled
+            && ("waiting_for_attack_class".equals(reason)
+                || "off".equals(triggerbot)))) {
+            emitStage("packet_waiting", 2, 4, "Packet hook kurulumu", "waiting",
+                timestamp, capability);
+            return;
+        }
+
+        if (packetActive) {
+            emitStage("packet_installed", 3, 4, "Packet hook kuruldu", "active",
+                timestamp, capability);
+        } else if (hookInstalled) {
             emitStage("hook_installed", 3, 4, "Attack hook kuruldu", "active",
                 timestamp, capability);
         }
@@ -312,7 +328,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             return;
         }
 
-        if ("active".equals(triggerbot) && "ready".equals(input)) {
+        if ("active".equals(triggerbot) && "ready".equals(input) && packetActive) {
             emitStage("triggerbot_ready", 4, 4, "TriggerBot hazir", "active",
                 timestamp, capability);
         } else if ("degraded".equals(triggerbot) && "missing".equals(input)) {
@@ -356,6 +372,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "version");
             copyCapability(capability, payload, "loader");
             copyCapability(capability, payload, "hook");
+            copyCapability(capability, payload, "packet");
+            copyCapability(capability, payload, "packet_hook");
+            copyCapability(capability, payload, "packet_reason");
             copyCapability(capability, payload, "input");
             copyCapability(capability, payload, "reason");
         }

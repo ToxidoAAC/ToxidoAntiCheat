@@ -7,6 +7,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.jar.JarFile;
 
 /**
@@ -14,8 +15,9 @@ import java.util.jar.JarFile;
  * Mod degildir; Fabric/Forge/NeoForge gerektirmez.
  */
 public final class AgentMain {
-    public static final String VERSION = "0.2.2";
+    public static final String VERSION = "0.2.3";
 
+    private static final AtomicLong DEBUG_LINES = new AtomicLong();
     private static volatile JarFile bootstrapJar;
 
     private AgentMain() {
@@ -91,6 +93,12 @@ public final class AgentMain {
             }
         }
         return options;
+    }
+
+    static void debug(String message) {
+        if (DEBUG_LINES.incrementAndGet() <= 800) {
+            log(message);
+        }
     }
 
     static void log(String message) {

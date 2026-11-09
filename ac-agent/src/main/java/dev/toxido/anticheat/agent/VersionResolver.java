@@ -49,6 +49,38 @@ public final class VersionResolver {
         }
     }
 
+    public static final class PacketTarget {
+        public final Class<?> owner;
+        public final String ownerName;
+        public final String methodName;
+        public final String methodDesc;
+        public final boolean instance;
+
+        PacketTarget(
+            Class<?> owner,
+            String methodName,
+            String methodDesc,
+            boolean instance
+        ) {
+            this.owner = owner;
+            this.ownerName = owner.getName();
+            this.methodName = methodName;
+            this.methodDesc = methodDesc;
+            this.instance = instance;
+        }
+
+        public String hook() {
+            return ownerName + "#" + methodName;
+        }
+    }
+
+    private static final String[] CONNECTION_NAMES = {
+        "net.minecraft.class_2535",
+        "net.minecraft.network.Connection",
+        "net.minecraft.network.ClientConnection",
+        "net.minecraft.client.multiplayer.ClientConnection"
+    };
+
     private static final String[] OWNER_NAMES = {
         "net.minecraft.class_636",
         "net.minecraft.client.multiplayer.MultiPlayerGameMode",
@@ -122,6 +154,85 @@ public final class VersionResolver {
             family,
             instance
         );
+    }
+
+    public static PacketTarget resolvePacket(Instrumentation instrumentation) {
+        if (instrumentation == null) {
+            return null;
+        }
+        Class<?> owner = findConnection(instrumentation.getAllLoadedClasses());
+        if (owner == null) {
+            return null;
+        }
+        Method send = findSend(owner);
+        if (send == null) {
+            AgentMain.log("Baglanti sinifi bulundu ama send metodu yok: " + owner.getName());
+            return null;
+        }
+        boolean instance = !Modifier.isStatic(send.getModifiers());
+        AgentMain.log(
+            "Paket hook cozuldu: sinif=" + owner.getName()
+                + " metot=" + send.getName()
+                + " imza=" + Type.getMethodDescriptor(send)
+        );
+        return new PacketTarget(
+            owner, send.getName(), Type.getMethodDescriptor(send), instance
+        );
+    }
+
+    private static Class<?> findConnection(Class<?>[] loaded) {
+        for (String name : CONNECTION_NAMES) {
+            for (Class<?> candidate : loaded) {
+                if (name.equals(candidate.getName())) {
+                    return candidate;
+                }
+            }
+        }
+        for (Class<?> candidate : loaded) {
+            String simple = candidate.getSimpleName();
+            if ("ClientConnection".equals(simple) || "Connection".equals(simple)) {
+                if (findSend(candidate) != null) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Method findSend(Class<?> owner) {
+        Method named = null;
+        Method shaped = null;
+        for (Method method : owner.getDeclaredMethods()) {
+            if (method.isBridge() || method.isSynthetic()
+                || method.getParameterCount() != 1
+                || method.getReturnType() != void.class
+                || Modifier.isAbstract(method.getModifiers())
+                || Modifier.isNative(method.getModifiers())
+                || Modifier.isStatic(method.getModifiers())) {
+                continue;
+            }
+            String parameter = method.getParameterTypes()[0].getName()
+                .toLowerCase(Locale.ROOT);
+            boolean packet = parameter.contains("class_2596")
+                || parameter.contains("packet");
+            if (!packet) {
+                continue;
+            }
+            String name = method.getName();
+            String lower = name.toLowerCase(Locale.ROOT);
+            if (lower.equals("send")
+                || lower.equals("sendpacket")
+                || lower.equals("method_10743")
+                || lower.equals("m_129512_")
+                || lower.equals("func_147298_b")) {
+                if (named == null || lower.equals("send") || lower.equals("method_10743")) {
+                    named = method;
+                }
+            } else if (shaped == null) {
+                shaped = method;
+            }
+        }
+        return named != null ? named : shaped;
     }
 
     private static Class<?> findOwner(Class<?>[] loaded) {

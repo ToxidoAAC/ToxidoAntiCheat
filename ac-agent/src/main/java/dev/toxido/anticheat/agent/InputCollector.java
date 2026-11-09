@@ -18,6 +18,7 @@ public final class InputCollector {
     private final Runnable onReady;
     private final AtomicBoolean ready = new AtomicBoolean(false);
     private volatile Process process;
+    private volatile boolean controllerDown;
 
     public InputCollector(Path helper, Consumer<InputEvent> sink, Runnable onReady) {
         this.helper = helper;
@@ -59,6 +60,10 @@ public final class InputCollector {
 
     public boolean isReady() {
         return ready.get();
+    }
+
+    public boolean isControllerDown() {
+        return controllerDown;
     }
 
     private void readLoop() {
@@ -109,6 +114,7 @@ public final class InputCollector {
                     true,
                     parts.length > 2 ? Long.parseLong(parts[2]) : 0L
                 );
+                case "C" -> controllerDown = parts.length > 1 && "1".equals(parts[1]);
                 default -> {
                     // Bilinmeyen satir; yoksay.
                 }

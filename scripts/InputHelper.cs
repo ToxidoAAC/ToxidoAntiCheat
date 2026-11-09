@@ -18,6 +18,11 @@ internal static class Program
     private const uint RIM_TYPEMOUSE = 0;
     private const ushort RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001;
     private const ushort RI_MOUSE_LEFT_BUTTON_UP = 0x0002;
+    private const ushort XINPUT_GAMEPAD_DPAD_UP = 0x0001;
+    private const ushort XINPUT_GAMEPAD_A = 0x1000;
+    private const ushort XINPUT_GAMEPAD_X = 0x4000;
+    private const ushort XINPUT_GAMEPAD_RIGHT_SHOULDER = 0x0200;
+    private const byte XINPUT_TRIGGER_THRESHOLD = 30;
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
     private delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -28,6 +33,9 @@ internal static class Program
     private static IntPtr window;
     private static int parentPid;
     private static Timer parentTimer;
+    private static Timer controllerTimer;
+    private static bool controllerDown;
+    private static bool controllerAvailable = true;
 
     [STAThread]
     private static int Main(string[] args)
@@ -47,6 +55,8 @@ internal static class Program
             {
                 parentTimer = new Timer(CheckParent, null, 2000, 2000);
             }
+
+            controllerTimer = new Timer(CheckController, null, 500, 50);
 
             hookProc = HookCallback;
             hook = SetWindowsHookEx(WH_MOUSE_LL, hookProc, GetModuleHandle(null), 0);
@@ -81,6 +91,52 @@ internal static class Program
             {
                 UnhookWindowsHookEx(hook);
             }
+        }
+    }
+
+    private static void CheckController(object state)
+    {
+        if (!controllerAvailable)
+        {
+            return;
+        }
+        try
+        {
+            XINPUT_STATE stateData;
+            uint result = XInputGetState(0, out stateData);
+            if (result != 0)
+            {
+                controllerAvailable = false;
+                Console.WriteLine("XINPUT_OFF");
+                Console.Out.Flush();
+                return;
+            }
+
+            ushort buttons = stateData.Gamepad.wButtons;
+            bool down = (buttons & XINPUT_GAMEPAD_A) != 0
+                || (buttons & XINPUT_GAMEPAD_X) != 0
+                || (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0
+                || (buttons & XINPUT_GAMEPAD_DPAD_UP) != 0
+                || stateData.Gamepad.bRightTrigger > XINPUT_TRIGGER_THRESHOLD;
+
+            if (down != controllerDown)
+            {
+                controllerDown = down;
+                Console.WriteLine("C " + (down ? "1" : "0") + " " + Now());
+                Console.Out.Flush();
+            }
+        }
+        catch (DllNotFoundException)
+        {
+            controllerAvailable = false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            controllerAvailable = false;
+        }
+        catch
+        {
+            // Controller okunamazsa fare tarafi etkilenmesin.
         }
     }
 
@@ -276,6 +332,25 @@ internal static class Program
         public uint ulExtraInformation;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XINPUT_GAMEPAD
+    {
+        public ushort wButtons;
+        public byte bLeftTrigger;
+        public byte bRightTrigger;
+        public short sThumbLX;
+        public short sThumbLY;
+        public short sThumbRX;
+        public short sThumbRY;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XINPUT_STATE
+    {
+        public uint dwPacketNumber;
+        public XINPUT_GAMEPAD Gamepad;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     private struct WNDCLASSEX
     {
@@ -341,6 +416,9 @@ internal static class Program
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
+
+    [DllImport("xinput1_4.dll")]
+    private static extern uint XInputGetState(uint dwUserIndex, out XINPUT_STATE pState);
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
