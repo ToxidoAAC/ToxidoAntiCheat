@@ -22,8 +22,8 @@ public final class Config {
     private Config(Properties properties, String deviceId) {
         this.apiBaseUrl = trimTrailingSlash(
             properties.getProperty("api.baseUrl", "http://127.0.0.1:8000"));
-        this.apiKey = properties.getProperty("api.key", "dev-key");
-        this.apiSecret = properties.getProperty("api.secret", "dev-secret-change-me");
+        this.apiKey = value(properties, "api.key", Secrets.apiKey());
+        this.apiSecret = value(properties, "api.secret", Secrets.apiSecret());
         this.heartbeatIntervalMs = intValue(properties, "heartbeat.intervalMs", 5000);
         this.agentTimeoutMs = intValue(properties, "agent.timeoutMs", 20000);
         this.attachTimeoutMs = intValue(properties, "attach.timeoutMs", 15000);
@@ -123,6 +123,14 @@ public final class Config {
         if (value != null && !value.isBlank()) {
             properties.setProperty(key, value);
         }
+    }
+
+    private static String value(Properties properties, String key, String fallback) {
+        String value = properties.getProperty(key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return value.trim();
     }
 
     private static String trimTrailingSlash(String value) {

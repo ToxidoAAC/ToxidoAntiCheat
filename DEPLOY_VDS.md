@@ -114,7 +114,10 @@ Sunucuda:
 
 ## 6. ac-app ayari
 
-`ac-app/config.properties` icinde:
+Uygulama tarafinda gercek anahtarlar `ac-app/config.local.properties` dosyasina
+yazilir; `scripts/build-exe.ps1` bunlari jar'a gomer. Bu dosya git'e eklenmez
+ve EXE icine kopyalanmaz; dagitilan `client.properties` yalnizca `api.baseUrl`
+ve zaman asimlarini tasir.
 
 ```properties
 api.baseUrl=http://65.108.39.249:25364
@@ -136,12 +139,12 @@ $env:AC_API_SECRET = "..."
 **40x1d0AC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
 botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.2**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.3**
 
 Tek komut:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.2/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.3/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
 Backend'deki `/dl` ve `/download/40x1d0AC.exe` yollari istege baglidir. VDS'te

@@ -38,6 +38,8 @@ ac-app (terminal + arka plan servisi) --HMAC HTTPS--> backend (FastAPI)
 - Windows 10/11 (son kullanici icin yalnizca `40x1d0AC.exe`; Java gerekmez)
 - Gelistirme: JDK 21 (projede `C:\Users\Toxido\tools\jdk-21` kullaniliyor),
   Maven 3.9+, Python 3.12+
+- EXE/obfuscation: ProGuard 7.10 ve Skidfuscator 2.0.11
+  (`%USERPROFILE%\tools\obfuscation\` altinda varsayilan yollar)
 - Discord botu (gercek mod icin)
 
 Bu makinede araclar `scripts/dev-env.ps1` ile PATH'e eklenir. PowerShell
@@ -58,6 +60,32 @@ Cikti:
 
 - `ac-agent/target/ac-agent.jar`
 - `ac-app/target/ac-app.jar` (Gson ve Jansi dahil, fat jar)
+
+Bu komut ham/dev jar'larini uretir ve varsayilan gelistirme anahtarlarini
+kullanir. Dagitim icin `scripts\build-exe.ps1` kullanilmalidir; gercek
+`api.key` / `api.secret` degerleri `ac-app/config.local.properties` dosyasindan
+okunup jar'a Base64 olarak gomulur.
+
+### Obfuscation
+
+`scripts\build-exe.ps1` varsayilan olarak su zinciri uygular:
+
+1. Maven `clean package`
+2. **ProGuard 7.10** — sinif/metot/alan adlarini gizler, shrink/optimize kapali
+3. **Skidfuscator 2.0.11 Community** — string, sayi ve akis (flow) obfuscation
+
+ProGuard ciktilari `build\obfuscation\ac-app.jar` / `ac-agent.jar`, Skid
+ciktilari `...-skid.jar` olur. Esleme dosyalari `build\obfuscation\mapping-*.txt`
+altinda tutulur; stack trace cozumlemek icin saklayin. Gson/Jansi, `Main`,
+`AgentMain` ve record siniflari korunur.
+
+Hizli debug icin obfuscation'i atlayin:
+
+```powershell
+.\scripts\build-exe.ps1 -NoObfuscate
+```
+
+Araclarin yolu farkliysa `-ProguardJar` ve `-SkidJar` parametrelerini kullanin.
 
 ## Yerel calistirma (dry-run)
 
@@ -128,9 +156,9 @@ jar'larin derlenmis olmasi gerekir.
 ## Tek EXE (Windows)
 
 `dist/40x1d0AC.exe`, Java kurulumu gerektirmeyen tek dosyalik surumdur.
-Icinde jlink ile olusturulmus Java 21 runtime, `ac-app.jar`, `ac-agent.jar`
-ve `client.properties` paketlenir. Ilk calistirmada icerik
-`%LOCALAPPDATA%\40x1d0AC\engine\<payload-id>\` altina cikarilir; sonraki
+Icinde jlink ile olusturulmus Java 21 runtime, obfuscate edilmis `ac-app.jar`,
+`ac-agent.jar` ve sir icermeyen `client.properties` paketlenir. Ilk calistirmada
+icerik `%LOCALAPPDATA%\40x1d0AC\engine\<payload-id>\` altina cikarilir; sonraki
 acilislarda hazir paket kullanilir. Minecraft'a mod kurulmaz.
 
 ### EXE olusturma
@@ -140,8 +168,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\build-exe.ps1
 ```
 
-Cikti: `dist\40x1d0AC.exe` (yaklasik 24 MB). Gereksinimler: JDK 21, Maven ve
-Windows'un yerlesik .NET Framework `csc.exe` derleyicisi. `jlink` runtime'i
+Cikti: `dist\40x1d0AC.exe` (yaklasik 24 MB). Gereksinimler: JDK 21, Maven,
+ProGuard 7.10, Skidfuscator 2.0.11 ve Windows'un yerlesik .NET Framework
+`csc.exe` derleyicisi. Gercek `api.key` / `api.secret` degerleri
+`ac-app\config.local.properties` dosyasindan build sirasinda gomulur; dagitilan
+`client.properties` bu degerleri icermez. `jlink` runtime'i
 `java.base,java.compiler,java.net.http,java.sql,jdk.attach,jdk.unsupported,
 java.logging,java.management` modulleriyle olusturur.
 
@@ -150,12 +181,12 @@ java.logging,java.management` modulleriyle olusturur.
 EXE **VDS uzerinden dagitilmaz**; VDS yalnizca API ve Discord botunu calistirir.
 Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.2**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.3**
 
 Tek satir Windows cmd:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.2/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.3/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
 Komut dosyayi `%TEMP%` altina indirir, ayri bir terminalde baslatir ve komutun
@@ -229,19 +260,22 @@ Cikti `SONUC: HAZIR` ise gercek test icin hazirsiniz. Eksik alan varsa
 Kanal olusturma 403 hatasi verirse bot rolunun kategori ve kanal izinlerini
 kontrol edin; gerekirse **Manage Roles** iznini ekleyin.
 
-Uygulama tarafinda `ac-app/config.properties` (veya ortam degiskenleri) ayni
-`api.key` / `api.secret` degerlerini kullanmalidir:
+Uygulama tarafinda gercek anahtarlar `ac-app/config.local.properties` dosyasina
+yazilir; `scripts/build-exe.ps1` bu degerleri jar'a gomer ve dagitilan
+`client.properties` dosyasindan cikarir. Bu dosya git'e eklenmez ve istemciye
+kopyalanmaz. Ornek:
 
 ```properties
 api.baseUrl=https://ac.example.com
-api.key=<ayni-anahtar>
-api.secret=<ayni-sir>
+api.key=<backend/.env ile ayni>
+api.secret=<backend/.env ile ayni>
 heartbeat.intervalMs=5000
 agent.timeoutMs=20000
 attach.timeoutMs=15000
 agent.version=0.1.0
 ```
 
+Dagitilan `client.properties` yalnizca `api.baseUrl` ve zaman asimlarini tasir.
 Ortam degiskenleri: `AC_API_URL`, `AC_API_KEY`, `AC_API_SECRET`,
 `AC_AGENT_JAR`.
 
@@ -271,6 +305,9 @@ kanali acar.
   gonderilir; veritabaninda SHA-256 ozeti tutulur.
 - `GET /dl` (ve `GET /download/40x1d0AC.exe`) `static/40x1d0AC.exe` dosyasini
   indirir; baska bir yol icin `DOWNLOAD_PATH` kullanilabilir.
+- Istemci `api.key` / `api.secret` degerleri jar'a Base64 olarak gomulur,
+  `client.properties` icinde tutulmaz. Yine de istemci tarafindaki bir sir
+  olarak degerlendirilmelidir; cihaz bazli anahtar Faz 2 kapsamindadir.
 - Uretimde HTTPS zorunludur (Caddy / Let's Encrypt onerilir).
 
 ## Test
@@ -300,11 +337,13 @@ ac-agent/      Java agent (AgentMain, AgentClient)
 ac-app/        Terminal splash + arka plan servisi (Config, MinecraftProcess,
                AgentBridge, AttachService, ApiClient, AppController,
                TerminalSplash, ServiceMain, LogReporter, ServiceLock)
+ac-app/src/main/java-templates/  Build sirasinda doldurulan Secrets.java
 backend/app/   FastAPI, SQLite, Discord kanal yonetimi, bot
 backend/static/ Indirilebilir 40x1d0AC.exe (VDS'e ayrica yuklenir)
 40x1d0AC.bat   Masaustu/cift tik baslatici
 backend/       requirements, .env.example, smoke_test.py, run.py
 scripts/       dev-env, run-backend, run-app, build-exe, Launcher.cs
+scripts/obfuscation/  ProGuard ve Skidfuscator yapilandirmalari
 dist/          40x1d0AC.exe ve dagitim paketleri (git'e eklenmez)
 tools/         fake Minecraft ve tani araclari
 ```

@@ -1,6 +1,9 @@
 param(
     [string]$Output = "",
-    [string]$ApiBaseUrl = ""
+    [string]$ApiBaseUrl = "",
+    [switch]$NoObfuscate,
+    [string]$ProguardJar = "",
+    [string]$SkidJar = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,18 +14,69 @@ if (-not $Output) {
     $Output = Join-Path $root 'dist\40x1d0AC.exe'
 }
 
+if (-not $ProguardJar) {
+    $ProguardJar = Join-Path $env:USERPROFILE 'tools\obfuscation\proguard-7.10.0\lib\proguard.jar'
+}
+if (-not $SkidJar) {
+    $SkidJar = Join-Path $env:USERPROFILE 'tools\obfuscation\skidfuscator-2.0.11.jar'
+}
+
 $build = Join-Path $root 'build\exe'
+$obfuscation = Join-Path $root 'build\obfuscation'
 $stage = Join-Path $build 'payload'
 $runtime = Join-Path $stage 'runtime'
 $appDir = Join-Path $stage 'app'
 $zipPath = Join-Path $build 'payload.zip'
 $iconPath = Join-Path $build '40x1d0AC.ico'
 $launcherSource = Join-Path $build 'Launcher.cs'
+$skidConfig = Join-Path $root 'scripts\obfuscation\skid.conf'
+$rawAppJar = Join-Path $root 'ac-app\target\ac-app.jar'
+$rawAgentJar = Join-Path $root 'ac-agent\target\ac-agent.jar'
+$obfuscatedAppJar = Join-Path $obfuscation 'ac-app-skid.jar'
+$obfuscatedAgentJar = Join-Path $obfuscation 'ac-agent-skid.jar'
+$clientConfigSource = Join-Path $root 'ac-app\config.local.properties'
+if (-not (Test-Path $clientConfigSource)) {
+    $clientConfigSource = Join-Path $root 'ac-app\config.properties'
+}
+
+if (-not (Test-Path $clientConfigSource)) {
+    throw "Istemci config bulunamadi: $clientConfigSource"
+}
+
+# Gercek API anahtarlarini Maven'e Base64 olarak gecir; kaynak kodda ve
+# client.properties icinde duz metin secret kalmasin.
+$secretProps = @{}
+Get-Content $clientConfigSource | ForEach-Object {
+    if ($_ -match '^\s*([^#][^=]*)=(.*)$') {
+        $secretProps[$matches[1].Trim()] = $matches[2].Trim()
+    }
+}
+
+$mavenArgs = @('-B', '-q', '-DskipTests')
+$apiKey = $secretProps['api.key']
+$apiSecret = $secretProps['api.secret']
+if (-not [string]::IsNullOrWhiteSpace($apiKey) -and
+    -not [string]::IsNullOrWhiteSpace($apiSecret)) {
+    $keyB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($apiKey))
+    $secretB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($apiSecret))
+    $mavenArgs += "-Dapi.key.b64=$keyB64"
+    $mavenArgs += "-Dapi.secret.b64=$secretB64"
+}
+else {
+    Write-Warning 'api.key/api.secret bulunamadi; gelistirme varsayilanlari kullanilacak.'
+}
+
+if (Test-Path $build) {
+    Remove-Item $build -Recurse -Force
+}
+if (Test-Path $obfuscation) {
+    Remove-Item $obfuscation -Recurse -Force
+}
 
 Write-Output 'Maven paketi derleniyor...'
 Push-Location $root
 try {
-    & mvn -B -q -DskipTests package
+    & mvn @mavenArgs clean package
     if ($LASTEXITCODE -ne 0) {
         throw "Maven basarisiz (exit $LASTEXITCODE)."
     }
@@ -31,9 +85,77 @@ finally {
     Pop-Location
 }
 
-if (Test-Path $build) {
-    Remove-Item $build -Recurse -Force
+$selectedAppJar = $rawAppJar
+$selectedAgentJar = $rawAgentJar
+
+if (-not $NoObfuscate) {
+    if (-not (Test-Path $ProguardJar)) {
+        throw "ProGuard bulunamadi: $ProguardJar"
+    }
+    if (-not (Test-Path $SkidJar)) {
+        throw "Skidfuscator bulunamadi: $SkidJar"
+    }
+
+    $java = Join-Path $env:JAVA_HOME 'bin\java.exe'
+    New-Item -ItemType Directory -Path $obfuscation -Force | Out-Null
+
+    Write-Output 'ProGuard ile sinif/metot isimleri gizleniyor...'
+    Push-Location $root
+    try {
+        & $java -jar $ProguardJar '@scripts\obfuscation\proguard-app.pro'
+        if ($LASTEXITCODE -ne 0) {
+            throw "ProGuard (app) basarisiz (exit $LASTEXITCODE)."
+        }
+        & $java -jar $ProguardJar '@scripts\obfuscation\proguard-agent.pro'
+        if ($LASTEXITCODE -ne 0) {
+            throw "ProGuard (agent) basarisiz (exit $LASTEXITCODE)."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Output 'Skidfuscator ile string/flow obfuscation uygulaniyor...'
+    # Skidfuscator kendi calisma dizininde `mappings/` onbellegi olusturur;
+    # depoyu kirletmemek icin build/obfuscation altinda calistir.
+    $skidConfigLocal = Join-Path $obfuscation 'skid.conf'
+    Copy-Item $skidConfig $skidConfigLocal -Force
+    Push-Location $obfuscation
+    try {
+        & $java -Xmx2g -jar $SkidJar obfuscate `
+            (Join-Path $obfuscation 'ac-app.jar') `
+            "--config=$skidConfigLocal" `
+            "--output=$obfuscatedAppJar" `
+            '--notrack'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Skidfuscator (app) basarisiz (exit $LASTEXITCODE)."
+        }
+        & $java -Xmx2g -jar $SkidJar obfuscate `
+            (Join-Path $obfuscation 'ac-agent.jar') `
+            "--config=$skidConfigLocal" `
+            "--output=$obfuscatedAgentJar" `
+            '--notrack'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Skidfuscator (agent) basarisiz (exit $LASTEXITCODE)."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    if (-not (Test-Path $obfuscatedAppJar)) {
+        throw "Obfuscated app jar bulunamadi: $obfuscatedAppJar"
+    }
+    if (-not (Test-Path $obfuscatedAgentJar)) {
+        throw "Obfuscated agent jar bulunamadi: $obfuscatedAgentJar"
+    }
+    $selectedAppJar = $obfuscatedAppJar
+    $selectedAgentJar = $obfuscatedAgentJar
 }
+else {
+    Write-Warning 'NoObfuscate secildi; ham jar dosyalari paketlenecek.'
+}
+
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 
 Write-Output 'Java runtime olusturuluyor...'
@@ -50,17 +172,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output 'Uygulama dosyalari hazirlaniyor...'
-Copy-Item (Join-Path $root 'ac-app\target\ac-app.jar') (Join-Path $appDir 'ac-app.jar')
-Copy-Item (Join-Path $root 'ac-agent\target\ac-agent.jar') (Join-Path $appDir 'ac-agent.jar')
+Copy-Item $selectedAppJar (Join-Path $appDir 'ac-app.jar')
+Copy-Item $selectedAgentJar (Join-Path $appDir 'ac-agent.jar')
 $clientConfig = Join-Path $appDir 'client.properties'
-$clientConfigSource = Join-Path $root 'ac-app\config.local.properties'
-if (-not (Test-Path $clientConfigSource)) {
-    $clientConfigSource = Join-Path $root 'ac-app\config.properties'
-}
 Copy-Item $clientConfigSource $clientConfig
 
+# Secret'lar jar icine gomuldu; istemciye giden config'de duz metin kalmasin.
+$lines = Get-Content $clientConfig | Where-Object {
+    $_ -notmatch '^\s*api\.(key|secret)\s*='
+}
 if ($ApiBaseUrl) {
-    $lines = Get-Content $clientConfig
     $lines = $lines | ForEach-Object {
         if ($_ -match '^api\.baseUrl=') {
             "api.baseUrl=$ApiBaseUrl"
@@ -69,7 +190,11 @@ if ($ApiBaseUrl) {
             $_
         }
     }
-    Set-Content -Path $clientConfig -Value $lines -Encoding ASCII
+}
+Set-Content -Path $clientConfig -Value $lines -Encoding ASCII
+
+if ((Get-Content $clientConfig -Raw) -match '(?m)^\s*api\.(key|secret)\s*=') {
+    throw 'client.properties icinde hala duz metin api.key/api.secret var.'
 }
 
 $payloadId = [Guid]::NewGuid().ToString('N')

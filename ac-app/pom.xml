@@ -14,6 +14,12 @@
     <artifactId>ac-app</artifactId>
     <name>Toxido AC Desktop App</name>
 
+    <properties>
+        <!-- Gelistirme varsayilanlari; build-exe.ps1 gercek degerleri -D ile gecer. -->
+        <api.key.b64>ZGV2LWtleQ==</api.key.b64>
+        <api.secret.b64>ZGV2LXNlY3JldC1jaGFuZ2UtbWU=</api.secret.b64>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>com.google.code.gson</groupId>
@@ -40,6 +46,19 @@
                         <arg>jdk.attach</arg>
                     </compilerArgs>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>templating-maven-plugin</artifactId>
+                <version>1.0.0</version>
+                <executions>
+                    <execution>
+                        <id>filter-secrets</id>
+                        <goals>
+                            <goal>filter-sources</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -18,6 +18,7 @@ data/
 backend/data/
 dist/
 build/
+mappings/
 ac-app/config.local.properties
 
 # IDE
