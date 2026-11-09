@@ -110,8 +110,13 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         bridge.start(this);
 
         reporter.status("Baglaniyor...", "Ajan yukleniyor (PID " + minecraft.pid() + ")");
+        String profile = minecraft.version() == null || minecraft.version().isBlank()
+            ? "unknown"
+            : minecraft.version();
         String agentArgs = "port=" + bridge.port() + ";token=" + bridge.token()
-            + ";version=" + (minecraft.version() == null || minecraft.version().isBlank() ? "unknown" : minecraft.version());
+            + ";version=" + safeArg(profile)
+            + ";game_dir=" + safeArg(minecraft.gameDir())
+            + ";profile=" + safeArg(profile);
         AttachService.loadAgent(minecraft.pid(), agentJar, agentArgs);
 
         if (!agentReady.await(config.attachTimeoutMs, TimeUnit.MILLISECONDS)) {
@@ -297,6 +302,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         boolean hookInstalled = !hook.isBlank() && !"-".equals(hook);
         boolean packetActive = "active".equals(packet);
         boolean packetFailed = "off".equals(packet) || "packet_hook_failed".equals(packetReason);
+        boolean unsupportedVersion = packetReason.startsWith("unsupported_version");
 
         if ("hook_failed".equals(reason) && !packetActive) {
             emitStage("hook_failed", 3, 4, "Attack hook kurulamadi", "failed",
@@ -305,10 +311,17 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         }
 
         if (packetFailed) {
-            emitStage("packet_failed", 3, 4, "Packet hook kurulamadi", "failed",
-                timestamp, capability);
-            emitStage("packet_failed_trigger", 4, 4, "TriggerBot devre disi", "failed",
-                timestamp, capability);
+            if (unsupportedVersion) {
+                emitStage("unsupported_version", 3, 4,
+                    "Desteklenmeyen surum", "failed", timestamp, capability);
+                emitStage("unsupported_trigger", 4, 4,
+                    "TriggerBot devre disi", "failed", timestamp, capability);
+            } else {
+                emitStage("packet_failed", 3, 4,
+                    "Packet hook kurulamadi", "failed", timestamp, capability);
+                emitStage("packet_failed_trigger", 4, 4,
+                    "TriggerBot devre disi", "failed", timestamp, capability);
+            }
             return;
         }
 
@@ -376,12 +389,18 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "triggerbot");
             copyCapability(capability, payload, "injection");
             copyCapability(capability, payload, "version");
+            copyCapability(capability, payload, "version_source");
             copyCapability(capability, payload, "loader");
+            copyCapability(capability, payload, "mapping");
+            copyCapability(capability, payload, "profile");
+            copyCapability(capability, payload, "jvm_main");
+            copyCapability(capability, payload, "pid");
             copyCapability(capability, payload, "hook");
             copyCapability(capability, payload, "packet");
             copyCapability(capability, payload, "packet_hook");
             copyCapability(capability, payload, "packet_reason");
             copyCapability(capability, payload, "input");
+            copyCapability(capability, payload, "input_reason");
             copyCapability(capability, payload, "reason");
         }
 
@@ -408,6 +427,15 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             reportedStages.remove(stage);
             reporter.log("Asama kuyrugu kapali: " + stage);
         }
+    }
+
+    private static String safeArg(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace(";", "")
+            .replace("\r", "")
+            .replace("\n", "");
     }
 
     private static void copyCapability(

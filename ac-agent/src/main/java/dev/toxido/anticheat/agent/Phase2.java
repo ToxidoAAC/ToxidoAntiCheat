@@ -16,6 +16,14 @@ public final class Phase2 {
     private static volatile String packetReason = "starting";
     private static volatile String packetHook = "-";
     private static volatile AgentClient clientRef;
+    private static volatile String detectedVersion = "unknown";
+    private static volatile String detectedLoader = "unknown";
+    private static volatile String versionSource = "unknown";
+    private static volatile String mapping = "unknown";
+    private static volatile String profileId = "-";
+    private static volatile String inputReason = "not_started";
+    private static volatile String jvmMain = "unknown";
+    private static volatile long jvmPid = -1L;
 
     private Phase2() {
     }
@@ -25,12 +33,24 @@ public final class Phase2 {
         AgentClient client,
         String versionHint
     ) {
+        start(instrumentation, client, versionHint, "", "");
+    }
+
+    public static void start(
+        Instrumentation instrumentation,
+        AgentClient client,
+        String versionHint,
+        String gameDir,
+        String profileName
+    ) {
         clientRef = client;
+        jvmPid = ProcessHandle.current().pid();
+        jvmMain = mainClass();
         injection = new InjectionScanner(instrumentation, client);
         injection.start();
 
         try {
-            NettyHook.start(instrumentation, client);
+            NettyHook.start(instrumentation, client, versionHint, gameDir, profileName);
         } catch (Throwable throwable) {
             packetStatus = "waiting";
             packetReason = "netty_hook_unavailable";
@@ -39,7 +59,9 @@ public final class Phase2 {
         }
 
         Thread installer = new Thread(
-            () -> installWhenReady(instrumentation, client, versionHint),
+            () -> installWhenReady(
+                instrumentation, client, versionHint, gameDir, profileName
+            ),
             "40x1d0AC-hook-install"
         );
         installer.setDaemon(true);
@@ -49,7 +71,9 @@ public final class Phase2 {
     private static void installWhenReady(
         Instrumentation instrumentation,
         AgentClient client,
-        String versionHint
+        String versionHint,
+        String gameDir,
+        String profileName
     ) {
         // Minecraft siniflari oyun acilirken gec yuklenir (genelde dunyaya
         // girince). Tek seferlik cozumleme yerine hazir olana kadar bekle.
@@ -58,7 +82,9 @@ public final class Phase2 {
         while (true) {
             VersionResolver.Target resolved = target;
             if (resolved == null) {
-                resolved = VersionResolver.resolve(instrumentation, versionHint, false);
+                resolved = VersionResolver.resolve(
+                    instrumentation, versionHint, gameDir, profileName, false
+                );
                 target = resolved;
             }
 
@@ -94,7 +120,10 @@ public final class Phase2 {
                     current.onInput(event);
                 }
             },
-            () -> client.sendCapability(capability())
+            () -> {
+                inputReason = input != null && input.isReady() ? "ready" : "starting";
+                client.sendCapability(capability());
+            }
         );
         correlator = new AttackCorrelator(resolved, collector, client::sendTrigger);
         holder[0] = correlator;
@@ -117,7 +146,10 @@ public final class Phase2 {
 
         if (!input.start()) {
             reason = "input_helper_missing";
+            inputReason = "input_helper_missing";
             AgentMain.log("Fare yardimcisi baslatilamadi; triggerbot degraded.");
+        } else {
+            inputReason = input.isReady() ? "ready" : "starting";
         }
         client.sendCapability(capability());
     }
@@ -126,10 +158,36 @@ public final class Phase2 {
         if ("active".equals(packetStatus) || nettyReason == null) {
             return;
         }
-        boolean changed = !nettyReason.equals(packetReason);
-        packetStatus = "waiting";
+        boolean unsupported = nettyReason.startsWith("unsupported_version");
+        boolean changed = !nettyReason.equals(packetReason)
+            || !(unsupported ? "off" : "waiting").equals(packetStatus);
+        packetStatus = unsupported ? "off" : "waiting";
         packetReason = nettyReason;
         packetHook = "-";
+        if (changed) {
+            AgentClient client = clientRef;
+            if (client != null) {
+                client.sendCapability(capability());
+            }
+        }
+    }
+
+    static void versionDetected(
+        GameVersionDetector.Result detected,
+        String selectedProfile
+    ) {
+        if (detected == null) {
+            return;
+        }
+        boolean changed = !detected.version.equals(detectedVersion)
+            || !detected.loader.equals(detectedLoader)
+            || !detected.source.equals(versionSource)
+            || !(selectedProfile == null ? "-" : selectedProfile).equals(profileId);
+        detectedVersion = detected.version;
+        detectedLoader = detected.loader;
+        versionSource = detected.source;
+        mapping = detected.mapping;
+        profileId = selectedProfile == null ? "-" : selectedProfile;
         if (changed) {
             AgentClient client = clientRef;
             if (client != null) {
@@ -177,8 +235,18 @@ public final class Phase2 {
             trigger = "degraded";
         }
         String inputStatus = input == null ? "missing" : (input.isReady() ? "ready" : "starting");
-        String version = target == null ? "unknown" : target.version;
-        String loader = target == null ? "unknown" : target.loader;
+        String version = detectedVersion;
+        if ("unknown".equals(version) && target != null) {
+            version = target.version;
+        }
+        String loader = detectedLoader;
+        if ("unknown".equals(loader) && target != null) {
+            loader = target.loader;
+        }
+        String currentInputReason = inputReason;
+        if ("not_started".equals(currentInputReason) && input != null) {
+            currentInputReason = input.isReady() ? "ready" : "starting";
+        }
         String hook = "active".equals(packetStatus)
             ? packetHook
             : (target == null ? "-" : target.hook());
@@ -191,13 +259,28 @@ public final class Phase2 {
         return "{\"triggerbot\":" + Json.quote(trigger)
             + ",\"injection\":" + Json.quote("active")
             + ",\"version\":" + Json.quote(version)
+            + ",\"version_source\":" + Json.quote(versionSource)
             + ",\"loader\":" + Json.quote(loader)
+            + ",\"mapping\":" + Json.quote(mapping)
+            + ",\"profile\":" + Json.quote(profileId)
+            + ",\"jvm_main\":" + Json.quote(jvmMain)
+            + ",\"pid\":" + jvmPid
             + ",\"hook\":" + Json.quote(hook)
             + ",\"packet\":" + Json.quote(packetStatus)
             + ",\"packet_hook\":" + Json.quote(packetHook)
             + ",\"packet_reason\":" + Json.quote(packetReason)
             + ",\"input\":" + Json.quote(inputStatus)
+            + ",\"input_reason\":" + Json.quote(currentInputReason)
             + ",\"reason\":" + Json.quote(currentReason) + "}";
+    }
+
+    private static String mainClass() {
+        String command = System.getProperty("sun.java.command", "").trim();
+        if (command.isEmpty()) {
+            return "unknown";
+        }
+        int space = command.indexOf(' ');
+        return space < 0 ? command : command.substring(0, space);
     }
 
     private static Path helperPath() {

@@ -279,8 +279,8 @@ foreach ($required in $requiredPayload) {
     $item = Get-Item $required
     Write-Output ("Payload dosyasi: {0} ({1} bayt)" -f $item.FullName, $item.Length)
 }
-if ((Get-Content (Join-Path $appDir 'client.properties') -Raw) -notmatch '(?m)^agent\.version=0\.2\.3\s*$') {
-    throw 'client.properties agent.version 0.2.3 degil.'
+if ((Get-Content (Join-Path $appDir 'client.properties') -Raw) -notmatch '(?m)^agent\.version=0\.2\.4\s*$') {
+    throw 'client.properties agent.version 0.2.4 degil.'
 }
 
 Write-Output 'Paket sikistiriliyor...'

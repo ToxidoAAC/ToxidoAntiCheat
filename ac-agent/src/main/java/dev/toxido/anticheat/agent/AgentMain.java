@@ -16,7 +16,7 @@ import java.util.jar.JarFile;
  * Mod degildir; Fabric/Forge/NeoForge gerektirmez.
  */
 public final class AgentMain {
-    public static final String VERSION = "0.2.3";
+    public static final String VERSION = "0.2.4";
 
     private static final AtomicLong DEBUG_LINES = new AtomicLong();
     private static final Deque<String> PENDING_LOGS = new ArrayDeque<>();
@@ -39,6 +39,8 @@ public final class AgentMain {
         int port = Integer.parseInt(options.getOrDefault("port", "0"));
         String token = options.getOrDefault("token", "");
         String version = options.getOrDefault("version", "unknown");
+        String gameDir = options.getOrDefault("game_dir", "");
+        String profile = options.getOrDefault("profile", "");
 
         log("Ajan yuklendi (" + mode + "), port=" + port + ", surum=" + VERSION);
 
@@ -54,7 +56,7 @@ public final class AgentMain {
         thread.start();
 
         if (instrumentation != null) {
-            Phase2.start(instrumentation, client, version);
+            Phase2.start(instrumentation, client, version, gameDir, profile);
         }
     }
 

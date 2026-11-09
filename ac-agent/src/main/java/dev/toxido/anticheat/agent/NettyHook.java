@@ -41,11 +41,28 @@ final class NettyHook {
 
     private static volatile String lastState = "";
     private static volatile boolean handlerLoadFailed;
+    private static volatile String versionHint = "unknown";
+    private static volatile String gameDir = "";
+    private static volatile String profileName = "";
+    private static volatile VersionProfile profile;
 
     private NettyHook() {
     }
 
     static void start(Instrumentation instrumentation, AgentClient client) {
+        start(instrumentation, client, "unknown", "", "");
+    }
+
+    static void start(
+        Instrumentation instrumentation,
+        AgentClient client,
+        String hint,
+        String directory,
+        String requestedProfile
+    ) {
+        versionHint = hint == null ? "unknown" : hint;
+        gameDir = directory == null ? "" : directory;
+        profileName = requestedProfile == null ? "" : requestedProfile;
         Thread thread = new Thread(
             () -> loop(instrumentation, client),
             "40x1d0AC-netty-hook"
@@ -66,6 +83,26 @@ final class NettyHook {
                     state(client, "waiting_for_minecraft_class");
                     sleep();
                     continue;
+                }
+
+                if (profile == null) {
+                    GameVersionDetector.Result detected = GameVersionDetector.detect(
+                        minecraftClass, gameDir, profileName
+                    );
+                    VersionProfile selected = VersionProfiles.select(
+                        detected.version, detected.loader, detected.mapping
+                    );
+                    if (selected == null) {
+                        state(client, "unsupported_version " + detected.summary());
+                        sleep();
+                        continue;
+                    }
+                    profile = selected;
+                    Phase2.versionDetected(detected, selected.id);
+                    AgentMain.log(
+                        "Surum profili secildi: " + selected.id
+                            + " (" + detected.summary() + ")"
+                    );
                 }
 
                 Object minecraft = staticInstance(minecraftClass);
@@ -397,12 +434,14 @@ final class NettyHook {
     }
 
     private static Object findNetworkHandler(Object minecraft) {
-        if (MC_12111_CLASS.equals(minecraft.getClass().getName())) {
-            Object world = readField(minecraft, MC_12111_WORLD_FIELD);
+        VersionProfile active = profile;
+        if (active != null && active.minecraftClass.equals(minecraft.getClass().getName())) {
+            Object world = readField(minecraft, active.worldField);
             if (world != null) {
-                Object direct = readField(world, WORLD_12111_NETWORK_HANDLER_FIELD);
+                Object direct = readField(world, active.networkHandlerField);
                 if (direct != null
-                    && NETWORK_HANDLER_12111_CLASS.equals(direct.getClass().getName())) {
+                    && (active.networkHandlerClass.equals(direct.getClass().getName())
+                        || isNetworkHandlerType(direct.getClass()))) {
                     return direct;
                 }
             }
@@ -501,6 +540,10 @@ final class NettyHook {
     }
 
     private static boolean isNetworkHandlerType(Class<?> type) {
+        VersionProfile active = profile;
+        if (active != null && active.networkHandlerClass.equals(type.getName())) {
+            return true;
+        }
         String name = type.getName().toLowerCase(Locale.ROOT);
         return name.contains("class_634")
             || name.contains("class_635")
@@ -524,13 +567,13 @@ final class NettyHook {
             return networkHandler;
         }
 
-        if (NETWORK_HANDLER_12111_CLASS.equals(networkHandler.getClass().getName())) {
-            Object direct = invokeNoArg(
-                networkHandler,
-                NETWORK_HANDLER_12111_CONNECTION_METHOD
-            );
+        VersionProfile active = profile;
+        if (active != null
+            && active.networkHandlerClass.equals(networkHandler.getClass().getName())) {
+            Object direct = invokeNoArg(networkHandler, active.connectionMethod);
             if (direct != null
-                && CONNECTION_12111_CLASS.equals(direct.getClass().getName())) {
+                && (active.connectionClass.equals(direct.getClass().getName())
+                    || isConnectionType(direct.getClass()))) {
                 return direct;
             }
         }
@@ -581,8 +624,10 @@ final class NettyHook {
     }
 
     private static Object findChannel(Object connection) {
-        if (CONNECTION_12111_CLASS.equals(connection.getClass().getName())) {
-            Object direct = readField(connection, CONNECTION_12111_CHANNEL_FIELD);
+        VersionProfile active = profile;
+        if (active != null
+            && active.connectionClass.equals(connection.getClass().getName())) {
+            Object direct = readField(connection, active.channelField);
             if (direct != null) {
                 return direct;
             }
@@ -648,6 +693,10 @@ final class NettyHook {
     }
 
     private static boolean isConnectionType(Class<?> type) {
+        VersionProfile active = profile;
+        if (active != null && active.connectionClass.equals(type.getName())) {
+            return true;
+        }
         String name = type.getName().toLowerCase(Locale.ROOT);
         return name.contains("class_2535")
             || name.contains("clientconnection")

@@ -445,7 +445,7 @@ class ChannelManager:
         embed.add_field(name="👤 Oyuncu", value=f"`{session['mc_name']}`", inline=True)
         embed.add_field(
             name="🧩 Sürüm",
-            value=f"`{session.get('mc_version') or '?'}`",
+            value=f"`{latest.get('version') or session.get('mc_version') or '?'}`",
             inline=True,
         )
         embed.add_field(
@@ -453,6 +453,19 @@ class ChannelManager:
             value=f"`{latest.get('loader') or '?'}`",
             inline=True,
         )
+        source = latest.get("version_source")
+        profile = latest.get("profile")
+        jvm_main = latest.get("jvm_main")
+        if source or profile or jvm_main:
+            embed.add_field(
+                name="🧭 Tespit",
+                value=(
+                    f"kaynak: `{source or '-'}`\n"
+                    f"profil: `{profile or '-'}`\n"
+                    f"jvm: `{_clip(str(jvm_main or '-'), 80)}`"
+                ),
+                inline=False,
+            )
         embed.add_field(
             name="🤖 Ajan",
             value=f"`{session.get('agent_version') or '?'}`",

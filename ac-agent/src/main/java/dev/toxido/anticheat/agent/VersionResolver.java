@@ -106,6 +106,16 @@ public final class VersionResolver {
         String versionHint,
         boolean logFailure
     ) {
+        return resolve(instrumentation, versionHint, "", "", logFailure);
+    }
+
+    public static Target resolve(
+        Instrumentation instrumentation,
+        String versionHint,
+        String gameDir,
+        String profileName,
+        boolean logFailure
+    ) {
         if (instrumentation == null) {
             return null;
         }
@@ -128,17 +138,32 @@ public final class VersionResolver {
         }
 
         Class<?> minecraft = findMinecraft(loaded);
-        String loader = detectLoader(loaded);
-        String version = versionHint;
-        if (version == null || version.isBlank() || "unknown".equalsIgnoreCase(version)) {
+        GameVersionDetector.Result detected = GameVersionDetector.detect(
+            minecraft, gameDir, profileName
+        );
+        String loader = detected.known() ? detected.loader : detectLoader(loaded);
+        String version = detected.known() ? detected.version : versionHint;
+        if (version == null || version.isBlank()
+            || "unknown".equalsIgnoreCase(version)
+            || !GameVersionDetector.looksLikeVersion(version)) {
             version = detectVersion(minecraft);
         }
         String family = family(version, owner.getName());
+        VersionProfile profile = VersionProfiles.select(
+            version, loader, detected.mapping
+        );
+        Phase2.versionDetected(
+            detected,
+            profile == null ? "-" : profile.id
+        );
         boolean instance = !Modifier.isStatic(attack.getModifiers());
 
         AgentMain.log(
             "Surum cozuldu: surum=" + version
+                + " kaynak=" + detected.source
                 + " loader=" + loader
+                + " mapping=" + detected.mapping
+                + " profil=" + (profile == null ? "-" : profile.id)
                 + " sinif=" + owner.getName()
                 + " metot=" + attack.getName()
                 + " aile=" + family
