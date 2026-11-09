@@ -222,7 +222,7 @@ DB_PATH=./data/toxido.db
 HOST=127.0.0.1
 PORT=8000
 DRY_RUN=0
-HEARTBEAT_TIMEOUT_SECONDS=45
+HEARTBEAT_TIMEOUT_SECONDS=120
 ```
 
 Bot izinleri: **Manage Channels, Send Messages, Read Message History, View
@@ -290,7 +290,7 @@ Ortam degiskenleri: `AC_API_URL`, `AC_API_KEY`, `AC_API_SECRET`,
    arsivlenir. `n`, ayni oyuncunun onceki kayitlarinin maksimumunun bir
    fazlasidir.
 7. Agent 20 saniye sessiz kalirsa uygulama oturumu `agent_silent` ile bitirir.
-   Backend 45 saniye heartbeat alamazsa oturumu `heartbeat_timeout` ile kapatir.
+   Backend 120 saniye heartbeat alamazsa oturumu `heartbeat_timeout` ile kapatir.
 
 Her oturum bagimsizdir; ayni oyuncunun sonraki oturumu yeni bir `Now/<mcname>`
 kanali acar.

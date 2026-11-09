@@ -38,6 +38,10 @@ def _channels(request: Request) -> ChannelManager:
     return request.app.state.channels
 
 
+def _alerts(request: Request):
+    return request.app.state.alerts
+
+
 async def _authenticate(request: Request, session_id: str):
     database = _db(request)
     row = await database.get_session(session_id)
@@ -228,15 +232,22 @@ async def end_session(payload: SessionEndRequest, request: Request) -> dict:
 @router.post("/event")
 async def session_event(payload: EventRequest, request: Request) -> dict:
     row = await _authenticate(request, payload.session_id)
-    inserted = await _db(request).record_event(
+    if row["status"] != "active":
+        raise HTTPException(status_code=409, detail="Oturum aktif degil")
+
+    database = _db(request)
+    # Event trafigi de istemcinin canli oldugunu kanitlar. Bu guncelleme
+    # olmadan yogun event akisi sirasinda oturum yanlislikla timeout'a duser.
+    await database.touch(payload.session_id, utcnow_iso())
+
+    inserted = await database.record_event(
         payload.session_id, payload.type, payload.payload, payload.event_key
     )
+    queued = False
     if inserted and payload.type in {"injection", "triggerbot"}:
-        try:
-            await _channels(request).send_event_alert(
-                dict(row), payload.type, payload.payload or {}
-            )
-        except Exception:
-            # Uyari gonderilemese de olay kaydi korunur.
-            log.exception("Discord uyarisi gonderilemedi: %s", payload.type)
-    return {"ok": True, "recorded": inserted}
+        # Discord rate limit'i /event yanitini bekletmesin; embed arka planda
+        # gonderilir. Olay kaydi her durumda korunur.
+        queued = _alerts(request).enqueue(
+            dict(row), payload.type, payload.payload or {}
+        )
+    return {"ok": True, "recorded": inserted, "alert_queued": queued}

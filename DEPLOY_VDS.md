@@ -46,7 +46,7 @@ DOWNLOAD_PATH=./static/40x1d0AC.exe
 HOST=0.0.0.0
 PORT=25364
 DRY_RUN=0
-HEARTBEAT_TIMEOUT_SECONDS=45
+HEARTBEAT_TIMEOUT_SECONDS=120
 ```
 
 - Panel `SERVER_PORT` veriyorsa backend onu `PORT` degerine tercih eder.
@@ -93,8 +93,12 @@ Invoke-RestMethod http://65.108.39.249:25364/health
 Beklenen cevap:
 
 ```json
-{"ok":true,"dry_run":false,"bot_ready":true,"active_sessions":0}
+{"ok":true,"version":"0.2.1","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"heartbeat_timeout_seconds":120}
 ```
+
+`alert_queue` Discord uyarilarinin bekleyen sayisidir; `alert_dropped`
+kuyruk doldugu icin gonderilemeyen uyari sayisidir. Normalde `alert_dropped`
+artmamalidir.
 
 Baglanti kurulamazsa:
 

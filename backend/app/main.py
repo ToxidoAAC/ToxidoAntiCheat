@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from .alerts import EventAlertQueue
 from .bot import start_bot
 from .channels import ChannelManager
 from .config import get_settings
@@ -76,12 +77,15 @@ async def lifespan(app: FastAPI):
 
     bot, bot_task = await start_bot(settings)
     channels = ChannelManager(bot, settings)
+    alerts = EventAlertQueue(channels)
+    alerts.start()
 
     app.state.settings = settings
     app.state.db = database
     app.state.bot = bot
     app.state.bot_task = bot_task
     app.state.channels = channels
+    app.state.alerts = alerts
 
     timeout_task = asyncio.create_task(_timeout_loop(app), name="session-timeout")
 
@@ -101,6 +105,8 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+        await alerts.stop()
+
         if bot is not None:
             await bot.close()
         if bot_task is not None:
@@ -113,7 +119,7 @@ async def lifespan(app: FastAPI):
         await database.close()
 
 
-app = FastAPI(title="Toxido Anti Cheat API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Toxido Anti Cheat API", version="0.2.1", lifespan=lifespan)
 app.include_router(router)
 
 
@@ -139,11 +145,16 @@ async def health() -> dict:
     database: Database = state.db
     active = await database.active_sessions()
     bot = state.bot
+    alerts: EventAlertQueue = state.alerts
     return {
         "ok": True,
+        "version": app.version,
         "dry_run": state.settings.dry_run,
         "bot_ready": bool(bot is not None and bot.is_ready()),
         "active_sessions": len(active),
+        "alert_queue": alerts.pending,
+        "alert_dropped": alerts.dropped,
+        "heartbeat_timeout_seconds": state.settings.heartbeat_timeout_seconds,
     }
 
 

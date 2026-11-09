@@ -105,5 +105,5 @@ def get_settings() -> Settings:
         host=host,
         port=port,
         dry_run=_bool("DRY_RUN", True),
-        heartbeat_timeout_seconds=_int("HEARTBEAT_TIMEOUT_SECONDS", 45),
+        heartbeat_timeout_seconds=_int("HEARTBEAT_TIMEOUT_SECONDS", 120),
     )
