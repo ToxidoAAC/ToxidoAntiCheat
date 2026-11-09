@@ -54,7 +54,7 @@ def _should_enqueue_alert(
     yalnizca yuksek guvenli ve bilinen turlerde Discord'a gider; boylece
     modlu istemcilerdeki sinif/path yanlis pozitifleri kanali doldurmaz.
     """
-    if event_type == "triggerbot":
+    if event_type in {"triggerbot", "stage"}:
         return True, ""
 
     settings = request.app.state.settings
@@ -277,7 +277,7 @@ async def session_event(payload: EventRequest, request: Request) -> dict:
     )
     queued = False
     filtered = False
-    if inserted and payload.type in {"injection", "triggerbot"}:
+    if inserted and payload.type in {"injection", "triggerbot", "stage"}:
         event_payload = payload.payload or {}
         send, reason = _should_enqueue_alert(request, payload.type, event_payload)
         if send:

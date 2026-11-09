@@ -181,7 +181,7 @@ class ChannelManager:
     async def send_event_alert(
         self, session: dict, event_type: str, payload: dict
     ) -> None:
-        if event_type not in {"injection", "triggerbot"}:
+        if event_type not in {"injection", "triggerbot", "stage"}:
             return
         if not self.enabled:
             log.info("[DRY-RUN] %s uyarisi: %s", event_type, payload)
@@ -201,9 +201,60 @@ class ChannelManager:
         await channel.send(embed=self._event_embed(session, event_type, payload))
 
     @staticmethod
+    def _stage_embed(session: dict, payload: dict) -> discord.Embed:
+        status = str(payload.get("status") or "?").strip().lower()
+        if status == "active":
+            color = 0x2ECC71
+        elif status == "waiting":
+            color = 0xE67E22
+        else:
+            color = 0xE74C3C
+
+        index = payload.get("stage_index", "?")
+        total = payload.get("stage_total", "?")
+        title = payload.get("title") or "Asama"
+        client_ts = payload.get("client_ts")
+        embed = discord.Embed(
+            title=f"Asama {index}/{total}: {title}",
+            color=color,
+            timestamp=_stage_datetime(client_ts),
+        )
+        embed.add_field(
+            name="Oyuncu", value=f"`{session['mc_name']}`", inline=True
+        )
+        embed.add_field(
+            name="Durum", value=f"`{_stage_label(status)}`", inline=True
+        )
+        seconds = _stage_seconds(client_ts)
+        if seconds is not None:
+            embed.add_field(
+                name="Zaman",
+                value=f"<t:{seconds}:T> • <t:{seconds}:f>",
+                inline=False,
+            )
+        for key, label in (
+            ("version", "Surum"),
+            ("loader", "Loader"),
+            ("hook", "Hook"),
+            ("input", "Input"),
+            ("triggerbot", "TriggerBot"),
+            ("reason", "Sebep"),
+        ):
+            value = payload.get(key)
+            if value is not None and str(value).strip() not in {"", "-"}:
+                embed.add_field(
+                    name=label, value=f"`{_clip(str(value), 200)}`", inline=True
+                )
+        embed.set_footer(text=f"Oturum: {session['id']}")
+        return embed
+
+    @staticmethod
     def _event_embed(
         session: dict, event_type: str, payload: dict
     ) -> discord.Embed:
+        if event_type == "stage":
+            return ChannelManager._stage_embed(session, payload)
+
         if event_type == "injection":
             embed = discord.Embed(
                 title="Supheli Enjeksiyon Tespiti",
@@ -288,6 +339,36 @@ class ChannelManager:
 
         embed.set_footer(text=f"Oturum: {session['id']}")
         return embed
+
+
+def _stage_seconds(value) -> int | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    if number > 10_000_000_000:
+        number /= 1000.0
+    return int(number)
+
+
+def _stage_datetime(value) -> datetime:
+    seconds = _stage_seconds(value)
+    if seconds is None:
+        return datetime.now(timezone.utc)
+    try:
+        return datetime.fromtimestamp(seconds, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return datetime.now(timezone.utc)
+
+
+def _stage_label(status: str) -> str:
+    return {
+        "active": "tamamlandi",
+        "waiting": "bekliyor",
+        "failed": "basarisiz",
+    }.get(status, status or "?")
 
 
 def _clip(value: str, limit: int = 1000) -> str:

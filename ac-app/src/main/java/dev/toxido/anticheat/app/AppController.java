@@ -1,13 +1,19 @@
 package dev.toxido.anticheat.app;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,7 +43,14 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private volatile long minecraftPid;
     private volatile ScheduledExecutorService scheduler;
     private volatile ScheduledExecutorService scannerScheduler;
+    private volatile ExecutorService stageExecutor;
     private final Set<String> reportedFindings = ConcurrentHashMap.newKeySet();
+    private final Set<String> reportedStages = ConcurrentHashMap.newKeySet();
+    private final List<JsonObject> capabilityHistory =
+        Collections.synchronizedList(new ArrayList<>());
+    private final AtomicBoolean sessionReady = new AtomicBoolean(false);
+    private final AtomicLong agentAttachedAt = new AtomicLong(0);
+    private volatile String stageRunId;
 
     public AppController(Config config, Reporter reporter) {
         this.config = config;
@@ -108,6 +121,17 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         ApiClient.StartResult start = api.startSession(minecraft, Instant.now().toString());
         this.sessionId = start.sessionId();
         this.sessionToken = start.token();
+        this.stageRunId = Long.toString(
+            agentAttachedAt.get() > 0 ? agentAttachedAt.get() : System.currentTimeMillis()
+        );
+
+        startStageExecutor();
+        emitStage(
+            "agent_attached", 1, 4, "Ajan baglandi", "active",
+            agentAttachedAt.get() > 0 ? agentAttachedAt.get() : System.currentTimeMillis(),
+            latestCapability()
+        );
+        flushCapabilityHistory();
 
         reporter.status(
             "Oturum acik",
@@ -154,6 +178,14 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 triggerEnd("agent_silent");
             }
         }, 5, 5, TimeUnit.SECONDS);
+    }
+
+    private void startStageExecutor() {
+        stageExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "toxido-ac-stage");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     private void startModuleScanner(long pid) {
@@ -205,7 +237,178 @@ public final class AppController implements Runnable, AgentBridge.Listener {
 
     @Override
     public void onCapability(JsonObject payload) {
-        reporter.log("Ajan yetenekleri: " + payload);
+        if (payload == null) {
+            return;
+        }
+
+        JsonObject capability = payload.deepCopy();
+        if (!capability.has("client_ts")) {
+            capability.addProperty("client_ts", System.currentTimeMillis());
+        }
+        reporter.log("Ajan yetenekleri: " + capability);
+
+        synchronized (capabilityHistory) {
+            if (!sessionReady.get()) {
+                capabilityHistory.add(capability);
+                while (capabilityHistory.size() > 20) {
+                    capabilityHistory.remove(0);
+                }
+                return;
+            }
+            emitCapabilityStages(capability);
+        }
+    }
+
+    private void flushCapabilityHistory() {
+        synchronized (capabilityHistory) {
+            List<JsonObject> snapshot = new ArrayList<>(capabilityHistory);
+            capabilityHistory.clear();
+            for (JsonObject capability : snapshot) {
+                emitCapabilityStages(capability);
+            }
+            // Birikmis kayitlar gonderildikten sonra dogrudan akisa gec.
+            sessionReady.set(true);
+        }
+    }
+
+    private JsonObject latestCapability() {
+        synchronized (capabilityHistory) {
+            if (capabilityHistory.isEmpty()) {
+                return null;
+            }
+            return capabilityHistory.get(capabilityHistory.size() - 1).deepCopy();
+        }
+    }
+
+    private void emitCapabilityStages(JsonObject capability) {
+        long timestamp = clientTimestamp(capability);
+        String reason = text(capability, "reason");
+        String triggerbot = text(capability, "triggerbot");
+        String hook = text(capability, "hook");
+        String input = text(capability, "input");
+        boolean hookInstalled = !hook.isBlank() && !"-".equals(hook);
+
+        if ("hook_failed".equals(reason)) {
+            emitStage("hook_failed", 3, 4, "Attack hook kurulamadi", "failed",
+                timestamp, capability);
+            return;
+        }
+
+        if (!hookInstalled && ("waiting_for_attack_class".equals(reason)
+            || ("off".equals(triggerbot) && "missing".equals(input)))) {
+            emitStage("hook_waiting", 2, 4, "Attack sinifi bekleniyor", "waiting",
+                timestamp, capability);
+            return;
+        }
+
+        if (hookInstalled) {
+            emitStage("hook_installed", 3, 4, "Attack hook kuruldu", "active",
+                timestamp, capability);
+        }
+
+        if ("input_helper_missing".equals(reason)) {
+            emitStage("input_missing", 4, 4, "Fare yardimcisi baslatilamadi", "failed",
+                timestamp, capability);
+            return;
+        }
+
+        if ("active".equals(triggerbot) && "ready".equals(input)) {
+            emitStage("triggerbot_ready", 4, 4, "TriggerBot hazir", "active",
+                timestamp, capability);
+        } else if ("degraded".equals(triggerbot) && "missing".equals(input)) {
+            emitStage("degraded", 4, 4, "TriggerBot degraded", "failed",
+                timestamp, capability);
+        }
+    }
+
+    private void emitStage(
+        String stage,
+        int index,
+        int total,
+        String title,
+        String status,
+        long timestamp,
+        JsonObject capability
+    ) {
+        if (!reportedStages.add(stage)) {
+            return;
+        }
+
+        String currentSession = sessionId;
+        String currentToken = sessionToken;
+        ExecutorService executor = stageExecutor;
+        if (currentSession == null || currentToken == null || executor == null) {
+            reportedStages.remove(stage);
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("stage", stage);
+        payload.addProperty("title", title);
+        payload.addProperty("status", status);
+        payload.addProperty("stage_index", index);
+        payload.addProperty("stage_total", total);
+        payload.addProperty("client_ts", timestamp);
+        payload.addProperty("run_id", stageRunId == null ? "na" : stageRunId);
+        if (capability != null) {
+            copyCapability(capability, payload, "triggerbot");
+            copyCapability(capability, payload, "injection");
+            copyCapability(capability, payload, "version");
+            copyCapability(capability, payload, "loader");
+            copyCapability(capability, payload, "hook");
+            copyCapability(capability, payload, "input");
+            copyCapability(capability, payload, "reason");
+        }
+
+        try {
+            executor.execute(() -> {
+                try {
+                    String runId = stageRunId == null ? "na" : stageRunId;
+                    api.sendEvent(
+                        currentSession, currentToken, "stage",
+                        "stage:" + runId + ":" + stage, payload
+                    );
+                    reporter.log(
+                        "Asama gonderildi: " + index + "/" + total + " " + stage
+                    );
+                } catch (Exception exception) {
+                    reportedStages.remove(stage);
+                    reporter.log(
+                        "Asama gonderilemedi (" + stage + "): "
+                            + exception.getMessage()
+                    );
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            reportedStages.remove(stage);
+            reporter.log("Asama kuyrugu kapali: " + stage);
+        }
+    }
+
+    private static void copyCapability(
+        JsonObject source, JsonObject target, String key
+    ) {
+        JsonElement value = source.get(key);
+        if (value != null && !value.isJsonNull()) {
+            target.add(key, value.deepCopy());
+        }
+    }
+
+    private static long clientTimestamp(JsonObject payload) {
+        JsonElement value = payload.get("client_ts");
+        if (value != null && !value.isJsonNull()) {
+            try {
+                return value.getAsLong();
+            } catch (RuntimeException ignored) {
+                // Gecersiz zaman damgasi yerine simdiki zamani kullan.
+            }
+        }
+        return System.currentTimeMillis();
+    }
+
+    private static String text(JsonObject payload, String key) {
+        JsonElement value = payload.get(key);
+        return value == null || value.isJsonNull() ? "" : value.getAsString();
     }
 
     @Override
@@ -258,7 +461,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
 
     @Override
     public void onAgentReady() {
-        lastAgentHeartbeat.set(System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        agentAttachedAt.set(now);
+        lastAgentHeartbeat.set(now);
         reporter.log("Ajan el sikismasi tamam.");
         agentReady.countDown();
     }
@@ -303,6 +508,10 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         ScheduledExecutorService currentScanner = scannerScheduler;
         if (currentScanner != null) {
             currentScanner.shutdownNow();
+        }
+        ExecutorService currentStage = stageExecutor;
+        if (currentStage != null) {
+            currentStage.shutdown();
         }
     }
 
