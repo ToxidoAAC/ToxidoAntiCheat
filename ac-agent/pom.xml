@@ -14,6 +14,13 @@
     <artifactId>ac-agent</artifactId>
     <name>Toxido AC Agent</name>
 
+    <properties>
+        <!-- Ajan, oyunun kendi JVM'ine yuklenir. 1.18-1.20.4 istemcileri
+             Java 17 kullanir; bu yuzden ajan siniflari Java 17 hedefiyle
+             derlenmelidir. Java 21/25 istemcilerde de calisir. -->
+        <maven.compiler.release>17</maven.compiler.release>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.ow2.asm</groupId>

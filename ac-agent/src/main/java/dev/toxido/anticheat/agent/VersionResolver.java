@@ -22,6 +22,7 @@ public final class VersionResolver {
         public final String version;
         public final String family;
         public final boolean instance;
+        public final VersionProfile profile;
 
         Target(
             Class<?> owner,
@@ -31,7 +32,8 @@ public final class VersionResolver {
             String loader,
             String version,
             String family,
-            boolean instance
+            boolean instance,
+            VersionProfile profile
         ) {
             this.owner = owner;
             this.minecraft = minecraft;
@@ -42,6 +44,7 @@ public final class VersionResolver {
             this.version = version;
             this.family = family;
             this.instance = instance;
+            this.profile = profile;
         }
 
         public String hook() {
@@ -121,7 +124,22 @@ public final class VersionResolver {
         }
 
         Class<?>[] loaded = instrumentation.getAllLoadedClasses();
-        Class<?> owner = findOwner(loaded);
+
+        // Vanilla istemcilerde sinif adlari obfuscated oldugu icin once
+        // surum/profil belirlenir; owner ve Minecraft sinifi profilden bulunur.
+        GameVersionDetector.Result early = GameVersionDetector.detect(
+            null, gameDir, profileName
+        );
+        String earlyVersion = early.known() ? early.version : versionHint;
+        String earlyLoader = early.known() ? early.loader : detectLoader(loaded);
+        VersionProfile earlyProfile = VersionProfiles.select(
+            earlyVersion, earlyLoader, early.mapping
+        );
+
+        Class<?> owner = findOwner(loaded, earlyProfile);
+        if (owner == null) {
+            owner = findOwner(loaded);
+        }
         if (owner == null) {
             if (logFailure) {
                 AgentMain.log("Etkilesim sinifi bulunamadi; triggerbot kapali.");
@@ -129,7 +147,10 @@ public final class VersionResolver {
             return null;
         }
 
-        Method attack = findAttack(owner);
+        Method attack = findAttack(owner, earlyProfile);
+        if (attack == null) {
+            attack = findAttack(owner);
+        }
         if (attack == null) {
             if (logFailure) {
                 AgentMain.log("Attack metodu bulunamadi: " + owner.getName());
@@ -137,7 +158,7 @@ public final class VersionResolver {
             return null;
         }
 
-        Class<?> minecraft = findMinecraft(loaded);
+        Class<?> minecraft = findMinecraft(loaded, earlyProfile);
         GameVersionDetector.Result detected = GameVersionDetector.detect(
             minecraft, gameDir, profileName
         );
@@ -152,6 +173,12 @@ public final class VersionResolver {
         VersionProfile profile = VersionProfiles.select(
             version, loader, detected.mapping
         );
+        if (profile == null) {
+            profile = earlyProfile;
+        }
+        if (profile != null) {
+            VersionProfiles.setActive(profile);
+        }
         Phase2.versionDetected(
             detected,
             profile == null ? "-" : profile.id
@@ -177,7 +204,8 @@ public final class VersionResolver {
             loader,
             version,
             family,
-            instance
+            instance,
+            profile
         );
     }
 
@@ -258,6 +286,50 @@ public final class VersionResolver {
             }
         }
         return named != null ? named : shaped;
+    }
+
+    private static Class<?> findOwner(Class<?>[] loaded, VersionProfile profile) {
+        if (profile == null || profile.attackClass == null) {
+            return null;
+        }
+        for (Class<?> candidate : loaded) {
+            if (profile.attackClass.equals(candidate.getName())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static Class<?> findMinecraft(Class<?>[] loaded, VersionProfile profile) {
+        if (profile == null || profile.minecraftClass == null) {
+            return null;
+        }
+        for (Class<?> candidate : loaded) {
+            if (profile.minecraftClass.equals(candidate.getName())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static Method findAttack(Class<?> owner, VersionProfile profile) {
+        if (profile == null
+            || profile.attackClass == null
+            || !profile.attackClass.equals(owner.getName())
+            || profile.attackMethod == null) {
+            return null;
+        }
+        for (Method method : owner.getDeclaredMethods()) {
+            if (method.isBridge()
+                || method.isSynthetic()
+                || method.getParameterCount() != 2
+                || method.getReturnType() != void.class
+                || !profile.attackMethod.equals(method.getName())) {
+                continue;
+            }
+            return method;
+        }
+        return null;
     }
 
     private static Class<?> findOwner(Class<?>[] loaded) {

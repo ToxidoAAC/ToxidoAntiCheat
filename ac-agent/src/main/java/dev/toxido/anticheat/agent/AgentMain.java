@@ -16,7 +16,7 @@ import java.util.jar.JarFile;
  * Mod degildir; Fabric/Forge/NeoForge gerektirmez.
  */
 public final class AgentMain {
-    public static final String VERSION = "0.2.4";
+    public static final String VERSION = "0.2.5";
 
     private static final AtomicLong DEBUG_LINES = new AtomicLong();
     private static final Deque<String> PENDING_LOGS = new ArrayDeque<>();

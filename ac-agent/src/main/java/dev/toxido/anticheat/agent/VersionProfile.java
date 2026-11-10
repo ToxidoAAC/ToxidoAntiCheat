@@ -17,6 +17,25 @@ public final class VersionProfile {
     public final String attackMethod;
     public final String packetClass;
 
+    // Vanilla (obfuscated) istemciler icin ek alanlar. Fabric/Mojang
+    // profillerinde null kalir; mevcut isim tabanli yedekler kullanilir.
+    public final String localPlayerClass;
+    public final String screenClass;
+    public final String screenField;
+    public final String optionsClass;
+    public final String optionsField;
+    public final String keyMappingClass;
+    public final String attackKeyField;
+    public final String keyNameField;
+    public final String keyDownMethod;
+    public final String livingClass;
+    public final String playerEntityClass;
+    public final String armorStandClass;
+    public final String entityClass;
+    public final String packetEntityField;
+    public final String packetActionField;
+    public final String packetAttackActionField;
+
     public VersionProfile(
         String id,
         String minecraftClass,
@@ -30,6 +49,52 @@ public final class VersionProfile {
         String attackMethod,
         String packetClass
     ) {
+        this(
+            id,
+            minecraftClass,
+            worldField,
+            networkHandlerField,
+            networkHandlerClass,
+            connectionMethod,
+            connectionClass,
+            channelField,
+            attackClass,
+            attackMethod,
+            packetClass,
+            null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null
+        );
+    }
+
+    public VersionProfile(
+        String id,
+        String minecraftClass,
+        String worldField,
+        String networkHandlerField,
+        String networkHandlerClass,
+        String connectionMethod,
+        String connectionClass,
+        String channelField,
+        String attackClass,
+        String attackMethod,
+        String packetClass,
+        String localPlayerClass,
+        String screenClass,
+        String screenField,
+        String optionsClass,
+        String optionsField,
+        String keyMappingClass,
+        String attackKeyField,
+        String keyNameField,
+        String keyDownMethod,
+        String livingClass,
+        String playerEntityClass,
+        String armorStandClass,
+        String entityClass,
+        String packetEntityField,
+        String packetActionField,
+        String packetAttackActionField
+    ) {
         this.id = id;
         this.minecraftClass = minecraftClass;
         this.worldField = worldField;
@@ -41,5 +106,21 @@ public final class VersionProfile {
         this.attackClass = attackClass;
         this.attackMethod = attackMethod;
         this.packetClass = packetClass;
+        this.localPlayerClass = localPlayerClass;
+        this.screenClass = screenClass;
+        this.screenField = screenField;
+        this.optionsClass = optionsClass;
+        this.optionsField = optionsField;
+        this.keyMappingClass = keyMappingClass;
+        this.attackKeyField = attackKeyField;
+        this.keyNameField = keyNameField;
+        this.keyDownMethod = keyDownMethod;
+        this.livingClass = livingClass;
+        this.playerEntityClass = playerEntityClass;
+        this.armorStandClass = armorStandClass;
+        this.entityClass = entityClass;
+        this.packetEntityField = packetEntityField;
+        this.packetActionField = packetActionField;
+        this.packetAttackActionField = packetAttackActionField;
     }
 }

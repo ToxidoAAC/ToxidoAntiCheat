@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
         await database.close()
 
 
-app = FastAPI(title="Toxido Anti Cheat API", version="0.2.4", lifespan=lifespan)
+app = FastAPI(title="Toxido Anti Cheat API", version="0.2.5", lifespan=lifespan)
 app.include_router(router)
 
 

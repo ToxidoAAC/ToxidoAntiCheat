@@ -46,22 +46,41 @@ final class GameState {
         boolean screenOpen = false;
         boolean attackKeyPressed = false;
         boolean reliable = false;
+        VersionProfile profile = target.profile != null
+            ? target.profile
+            : VersionProfiles.active();
 
         try {
             Object minecraft = staticInstance(target.minecraft);
             if (minecraft != null) {
                 reliable = true;
-                Object screen = fieldByNames(
-                    minecraft, "currentScreen", "field_1755", "screen"
-                );
+                Object screen = profile == null
+                    ? null
+                    : fieldByNames(minecraft, profile.screenField);
+                if (screen == null) {
+                    screen = fieldByNames(
+                        minecraft, "currentScreen", "field_1755", "screen"
+                    );
+                }
+                if (screen == null && profile != null) {
+                    screen = fieldOfType(minecraft, profile.screenClass);
+                }
                 if (screen == null) {
                     screen = fieldByType(minecraft, "screen", "class_437");
                 }
                 screenOpen = screen != null;
 
-                Object options = fieldByNames(
-                    minecraft, "options", "field_1690", "gameOptions"
-                );
+                Object options = profile == null
+                    ? null
+                    : fieldByNames(minecraft, profile.optionsField);
+                if (options == null) {
+                    options = fieldByNames(
+                        minecraft, "options", "field_1690", "gameOptions"
+                    );
+                }
+                if (options == null && profile != null) {
+                    options = fieldOfType(minecraft, profile.optionsClass);
+                }
                 if (options == null) {
                     options = fieldByType(
                         minecraft, "class_315", "gameoptions", "options"
@@ -72,9 +91,17 @@ final class GameState {
                 }
                 if (options != null) {
                     // Mojang: keyAttack | Yarn: attackKey | obf: field_1839
-                    Object attackKey = fieldByNames(
-                        options, "attackKey", "keyAttack", "field_1839"
-                    );
+                    Object attackKey = profile == null
+                        ? null
+                        : fieldByNames(options, profile.attackKeyField);
+                    if (attackKey == null) {
+                        attackKey = fieldByNames(
+                            options, "attackKey", "keyAttack", "field_1839"
+                        );
+                    }
+                    if (attackKey == null && profile != null) {
+                        attackKey = fieldOfType(options, profile.keyMappingClass);
+                    }
                     if (attackKey == null) {
                         attackKey = fieldByTypeAndName(options, "keymapping", "attack");
                     }
@@ -85,14 +112,16 @@ final class GameState {
                         attackKey = fieldByTypeAndName(options, "class_304", "attack");
                     }
                     // Mojang isDown | Yarn isPressed | SRG m_90857_
-                    attackKeyPressed = bool(
-                        attackKey,
-                        "isPressed",
-                        "isDown",
-                        "method_1434",
-                        "m_90857_",
-                        "func_151468_f"
-                    );
+                    String keyDown = profile == null ? null : profile.keyDownMethod;
+                    attackKeyPressed = (keyDown != null && bool(attackKey, keyDown))
+                        || bool(
+                            attackKey,
+                            "isPressed",
+                            "isDown",
+                            "method_1434",
+                            "m_90857_",
+                            "func_151468_f"
+                        );
                 }
             }
         } catch (Throwable throwable) {
@@ -100,9 +129,15 @@ final class GameState {
         }
 
         String type = targetObject.getClass().getName();
-        boolean living = isLiving(targetObject.getClass());
-        boolean player = isPlayer(targetObject.getClass());
-        boolean armorStand = hasName(targetObject.getClass(), "armorstand", "class_1531");
+        boolean living = (profile != null
+            && matchesHierarchy(targetObject.getClass(), profile.livingClass))
+            || isLiving(targetObject.getClass());
+        boolean player = (profile != null
+            && matchesHierarchy(targetObject.getClass(), profile.playerEntityClass))
+            || isPlayer(targetObject.getClass());
+        boolean armorStand = (profile != null
+            && matchesHierarchy(targetObject.getClass(), profile.armorStandClass))
+            || hasName(targetObject.getClass(), "armorstand", "class_1531");
         boolean inTabList = true;
         UUID targetUuid = uuid(targetObject);
 
@@ -117,12 +152,17 @@ final class GameState {
                     "m_91403_"
                 );
                 if (handler == null && minecraft != null) {
-                    handler = invokeReturning(
-                        minecraft,
-                        "clientpacketlistener",
-                        "clientplaynetworkhandler",
-                        "class_634"
-                    );
+                    if (profile != null && profile.networkHandlerClass != null) {
+                        handler = invokeReturning(minecraft, profile.networkHandlerClass);
+                    }
+                    if (handler == null) {
+                        handler = invokeReturning(
+                            minecraft,
+                            "clientpacketlistener",
+                            "clientplaynetworkhandler",
+                            "class_634"
+                        );
+                    }
                 }
                 if (handler != null && targetUuid != null) {
                     Object entry = invokeUuid(
@@ -280,6 +320,48 @@ final class GameState {
             type = type.getSuperclass();
         }
         return null;
+    }
+
+    private static Object fieldOfType(Object instance, String className) {
+        if (instance == null || className == null || className.isEmpty()) {
+            return null;
+        }
+        Class<?> type = instance.getClass();
+        while (type != null) {
+            for (Field field : type.getDeclaredFields()) {
+                if (!matches(field.getType(), className)) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    return field.get(instance);
+                } catch (Throwable ignored) {
+                }
+            }
+            type = type.getSuperclass();
+        }
+        return null;
+    }
+
+    private static boolean matches(Class<?> type, String expected) {
+        if (type == null || expected == null || expected.isEmpty()) {
+            return false;
+        }
+        if (expected.equals(type.getName())) {
+            return true;
+        }
+        return expected.indexOf('.') < 0 && expected.equals(type.getSimpleName());
+    }
+
+    private static boolean matchesHierarchy(Class<?> type, String expected) {
+        Class<?> current = type;
+        while (current != null) {
+            if (matches(current, expected)) {
+                return true;
+            }
+            current = current.getSuperclass();
+        }
+        return false;
     }
 
     private static boolean bool(Object instance, String... names) {

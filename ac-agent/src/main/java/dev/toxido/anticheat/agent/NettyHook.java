@@ -76,8 +76,28 @@ final class NettyHook {
         Class<?> minecraftClass = null;
         while (true) {
             try {
+                // Vanilla istemcilerde Minecraft sinifi obfuscated oldugu
+                // icin once surumu/profile'i bul, sonra sinifi profile gore ara.
+                if (profile == null) {
+                    GameVersionDetector.Result early = GameVersionDetector.detect(
+                        null, gameDir, profileName
+                    );
+                    VersionProfile selected = VersionProfiles.select(
+                        early.version, early.loader, early.mapping
+                    );
+                    if (selected != null) {
+                        profile = selected;
+                        VersionProfiles.setActive(selected);
+                        Phase2.versionDetected(early, selected.id);
+                        AgentMain.log(
+                            "Surum profili secildi: " + selected.id
+                                + " (" + early.summary() + ")"
+                        );
+                    }
+                }
+
                 if (minecraftClass == null) {
-                    minecraftClass = findMinecraft(instrumentation);
+                    minecraftClass = findMinecraft(instrumentation, profile);
                 }
                 if (minecraftClass == null) {
                     state(client, "waiting_for_minecraft_class");
@@ -98,6 +118,7 @@ final class NettyHook {
                         continue;
                     }
                     profile = selected;
+                    VersionProfiles.setActive(selected);
                     Phase2.versionDetected(detected, selected.id);
                     AgentMain.log(
                         "Surum profili secildi: " + selected.id
@@ -392,8 +413,18 @@ final class NettyHook {
         return builder.toString();
     }
 
-    private static Class<?> findMinecraft(Instrumentation instrumentation) {
+    private static Class<?> findMinecraft(
+        Instrumentation instrumentation,
+        VersionProfile active
+    ) {
         Class<?>[] loaded = instrumentation.getAllLoadedClasses();
+        if (active != null && active.minecraftClass != null) {
+            for (Class<?> candidate : loaded) {
+                if (classMatches(candidate, active.minecraftClass)) {
+                    return candidate;
+                }
+            }
+        }
         for (String name : MINECRAFT_NAMES) {
             for (Class<?> candidate : loaded) {
                 if (name.equals(candidate.getName())) {
@@ -430,17 +461,49 @@ final class NettyHook {
             } catch (Throwable ignored) {
             }
         }
+
+        // Vanilla obfuscated istemcide getInstance adi da obfuscated olur;
+        // Minecraft donduren static no-arg metodu sekle gore bul.
+        for (Method method : allMethods(type)) {
+            if (!Modifier.isStatic(method.getModifiers())
+                || method.getParameterCount() != 0
+                || !type.isAssignableFrom(method.getReturnType())) {
+                continue;
+            }
+            try {
+                method.setAccessible(true);
+                Object value = method.invoke(null);
+                if (value != null) {
+                    return value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        for (Field field : type.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())
+                || !type.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            try {
+                field.setAccessible(true);
+                Object value = field.get(null);
+                if (value != null) {
+                    return value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         return null;
     }
 
     private static Object findNetworkHandler(Object minecraft) {
         VersionProfile active = profile;
-        if (active != null && active.minecraftClass.equals(minecraft.getClass().getName())) {
+        if (active != null && classMatches(minecraft.getClass(), active.minecraftClass)) {
             Object world = readField(minecraft, active.worldField);
             if (world != null) {
                 Object direct = readField(world, active.networkHandlerField);
                 if (direct != null
-                    && (active.networkHandlerClass.equals(direct.getClass().getName())
+                    && (classMatches(direct.getClass(), active.networkHandlerClass)
                         || isNetworkHandlerType(direct.getClass()))) {
                     return direct;
                 }
@@ -452,6 +515,7 @@ final class NettyHook {
             "method_1562",
             "getNetworkHandler",
             "getPlayNetworkHandler",
+            "getConnection",
             "m_1562_"
         );
         if (named != null) {
@@ -493,7 +557,8 @@ final class NettyHook {
             String name = type.getName().toLowerCase(Locale.ROOT);
             if (!name.contains("class_746")
                 && !name.contains("clientworld")
-                && !name.contains("class_638")) {
+                && !name.contains("class_638")
+                && !name.contains("clientlevel")) {
                 continue;
             }
             try {
@@ -541,14 +606,15 @@ final class NettyHook {
 
     private static boolean isNetworkHandlerType(Class<?> type) {
         VersionProfile active = profile;
-        if (active != null && active.networkHandlerClass.equals(type.getName())) {
+        if (active != null && classMatches(type, active.networkHandlerClass)) {
             return true;
         }
         String name = type.getName().toLowerCase(Locale.ROOT);
         return name.contains("class_634")
             || name.contains("class_635")
             || name.contains("networkhandler")
-            || name.contains("playnetworkhandler");
+            || name.contains("playnetworkhandler")
+            || name.contains("clientpacketlistener");
     }
 
     private static boolean hasConnectionReturn(Class<?> type) {
@@ -569,10 +635,10 @@ final class NettyHook {
 
         VersionProfile active = profile;
         if (active != null
-            && active.networkHandlerClass.equals(networkHandler.getClass().getName())) {
+            && classMatches(networkHandler.getClass(), active.networkHandlerClass)) {
             Object direct = invokeNoArg(networkHandler, active.connectionMethod);
             if (direct != null
-                && (active.connectionClass.equals(direct.getClass().getName())
+                && (classMatches(direct.getClass(), active.connectionClass)
                     || isConnectionType(direct.getClass()))) {
                 return direct;
             }
@@ -626,7 +692,7 @@ final class NettyHook {
     private static Object findChannel(Object connection) {
         VersionProfile active = profile;
         if (active != null
-            && active.connectionClass.equals(connection.getClass().getName())) {
+            && classMatches(connection.getClass(), active.connectionClass)) {
             Object direct = readField(connection, active.channelField);
             if (direct != null) {
                 return direct;
@@ -694,13 +760,24 @@ final class NettyHook {
 
     private static boolean isConnectionType(Class<?> type) {
         VersionProfile active = profile;
-        if (active != null && active.connectionClass.equals(type.getName())) {
+        if (active != null && classMatches(type, active.connectionClass)) {
             return true;
         }
         String name = type.getName().toLowerCase(Locale.ROOT);
         return name.contains("class_2535")
             || name.contains("clientconnection")
             || name.endsWith(".connection");
+    }
+
+    private static boolean classMatches(Class<?> type, String expected) {
+        if (type == null || expected == null || expected.isEmpty()) {
+            return false;
+        }
+        if (expected.equals(type.getName())) {
+            return true;
+        }
+        return expected.indexOf('.') < 0
+            && expected.equals(type.getSimpleName());
     }
 
     private static boolean isChannelType(Class<?> type) {

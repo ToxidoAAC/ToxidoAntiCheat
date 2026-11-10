@@ -41,17 +41,54 @@ final class PacketAttack {
         Class<?> type = packet.getClass();
         String name = type.getName();
         String simple = type.getSimpleName().toLowerCase(Locale.ROOT);
+        VersionProfile profile = VersionProfiles.active();
+        boolean profilePacket = matchesClass(type, profile == null ? null : profile.packetClass);
+        boolean attackPacket = simple.contains("serverboundattackpacket")
+            || "net.minecraft.network.protocol.game.ServerboundAttackPacket"
+                .equals(name);
         boolean interact = "net.minecraft.class_2824".equals(name)
             || simple.contains("serverboundinteractpacket")
-            || simple.contains("playerinteractentityc2spacket");
-        if (!interact) {
+            || simple.contains("playerinteractentityc2spacket")
+            || profilePacket;
+        if (!interact && !attackPacket) {
             return new Result(false, -1, null, name);
         }
 
-        boolean attack = isAttack(packet, type);
+        // 26.x istemcilerinde saldiri, ServerboundInteractPacket'ten ayrilip
+        // kendi ServerboundAttackPacket sinifina tasindi.
+        boolean attack = attackPacket || isAttack(packet, type)
+            || isProfileAttack(packet, type, profile, profilePacket);
         int entityId = entityId(packet, type);
         Object target = entityId < 0 ? null : findTarget(type.getClassLoader(), entityId);
         return new Result(attack, entityId, target, name);
+    }
+
+    private static boolean isProfileAttack(
+        Object packet,
+        Class<?> type,
+        VersionProfile profile,
+        boolean profilePacket
+    ) {
+        if (!profilePacket || profile == null) {
+            return false;
+        }
+        // Vanilla obfuscated paketlerde Action enum'u dogrudan isimle
+        // bulunamaz; paket alanindaki deger, sinifin ATTACK_ACTION
+        // sabitiyle ayni nesne mi diye karsilastirilir.
+        try {
+            Field actionField = field(type, profile.packetActionField);
+            Field attackField = field(type, profile.packetAttackActionField);
+            if (actionField == null || attackField == null) {
+                return false;
+            }
+            actionField.setAccessible(true);
+            attackField.setAccessible(true);
+            Object action = actionField.get(packet);
+            Object attackAction = attackField.get(null);
+            return action != null && action == attackAction;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static boolean isAttack(Object packet, Class<?> type) {
@@ -128,6 +165,37 @@ final class PacketAttack {
     }
 
     private static int entityId(Object packet, Class<?> type) {
+        VersionProfile profile = VersionProfiles.active();
+        // 26.x ServerboundAttackPacket bir record'dur ve entityId() metodu
+        // ile hedef entity kimligini acik eder.
+        for (Method method : type.getDeclaredMethods()) {
+            if (method.getParameterCount() != 0
+                || Modifier.isStatic(method.getModifiers())
+                || method.getReturnType() != int.class) {
+                continue;
+            }
+            String name = method.getName().toLowerCase(Locale.ROOT);
+            if (!name.equals("entityid") && !name.equals("getentityid")) {
+                continue;
+            }
+            try {
+                method.setAccessible(true);
+                return (Integer) method.invoke(packet);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        if (profile != null && matchesClass(type, profile.packetClass)) {
+            Field mapped = field(type, profile.packetEntityField);
+            if (mapped != null && mapped.getType() == int.class) {
+                try {
+                    mapped.setAccessible(true);
+                    return mapped.getInt(packet);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
         Field field = field(type, "field_12870", "entityid", "entity_id", "id");
         if (field != null && field.getType() == int.class) {
             try {
@@ -156,7 +224,13 @@ final class PacketAttack {
 
     private static Object findTarget(ClassLoader loader, int entityId) {
         try {
-            Class<?> minecraft = findClass(loader, MINECRAFT_NAMES);
+            VersionProfile profile = VersionProfiles.active();
+            Class<?> minecraft = profile == null || profile.minecraftClass == null
+                ? null
+                : findClass(loader, new String[] { profile.minecraftClass });
+            if (minecraft == null) {
+                minecraft = findClass(loader, MINECRAFT_NAMES);
+            }
             if (minecraft == null) {
                 return null;
             }
@@ -168,6 +242,9 @@ final class PacketAttack {
             Object world = fieldByNames(client, "field_1687", "world", "level");
             if (world == null) {
                 world = fieldByType(client, "class_638", "clientlevel", "clientworld");
+            }
+            if (world == null && profile != null) {
+                world = worldFromPlayer(client, profile);
             }
             if (world == null) {
                 return null;
@@ -183,6 +260,31 @@ final class PacketAttack {
             AgentMain.debug("[PACKET] hedef cozulemedi: " + throwable);
             return null;
         }
+    }
+
+    private static Object worldFromPlayer(Object client, VersionProfile profile) {
+        Object player = fieldByNames(client, profile.worldField);
+        if (player == null) {
+            return null;
+        }
+        Object handler = fieldByNames(player, profile.networkHandlerField);
+        if (handler == null) {
+            return null;
+        }
+        for (Field candidate : handler.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(candidate.getModifiers())) {
+                continue;
+            }
+            try {
+                candidate.setAccessible(true);
+                Object value = candidate.get(handler);
+                if (value != null && findEntityMethod(value.getClass()) != null) {
+                    return value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     private static Class<?> findClass(ClassLoader loader, String[] names) {
@@ -220,32 +322,60 @@ final class PacketAttack {
                 }
             }
         }
+        for (Field field : type.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())
+                || !type.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            try {
+                field.setAccessible(true);
+                Object value = field.get(null);
+                if (value != null) {
+                    return value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         return null;
     }
 
     private static Method findEntityMethod(Class<?> worldType) {
         Method fallback = null;
-        for (Method method : worldType.getDeclaredMethods()) {
-            if (method.getParameterCount() != 1
-                || method.getParameterTypes()[0] != int.class) {
-                continue;
+        Class<?> current = worldType;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (method.getParameterCount() != 1
+                    || method.getParameterTypes()[0] != int.class) {
+                    continue;
+                }
+                String name = method.getName().toLowerCase(Locale.ROOT);
+                String result = method.getReturnType().getName().toLowerCase(Locale.ROOT);
+                if (!result.contains("entity") && !result.contains("class_1297")) {
+                    continue;
+                }
+                if (name.equals("getentitybyid")
+                    || name.equals("getentity")
+                    || name.equals("method_8469")
+                    || name.equals("m_103904_")) {
+                    return method;
+                }
+                if (fallback == null) {
+                    fallback = method;
+                }
             }
-            String name = method.getName().toLowerCase(Locale.ROOT);
-            String result = method.getReturnType().getName().toLowerCase(Locale.ROOT);
-            if (!result.contains("entity") && !result.contains("class_1297")) {
-                continue;
-            }
-            if (name.equals("getentitybyid")
-                || name.equals("getentity")
-                || name.equals("method_8469")
-                || name.equals("m_103904_")) {
-                return method;
-            }
-            if (fallback == null) {
-                fallback = method;
-            }
+            current = current.getSuperclass();
         }
         return fallback;
+    }
+
+    private static boolean matchesClass(Class<?> type, String expected) {
+        if (type == null || expected == null || expected.isEmpty()) {
+            return false;
+        }
+        if (expected.equals(type.getName())) {
+            return true;
+        }
+        return expected.indexOf('.') < 0 && expected.equals(type.getSimpleName());
     }
 
     private static Field field(Class<?> type, String... names) {

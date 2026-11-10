@@ -62,7 +62,8 @@ public final class GameVersionDetector {
         Pattern.compile("net\\.minecraft:client:([^\"\\s,}]+)");
     private static final Pattern VERSION_PATTERN = Pattern.compile(
         "^(?:\\d{1,2}\\.\\d{1,2}(?:\\.\\d{1,2})?"
-            + "(?:[- ]?(?:pre|rc)\\d+)?|\\d{2}w\\d{2}[a-z])$",
+            + "(?:[- ]?(?:pre|rc|snapshot)[- ]?\\d+)?"
+            + "|\\d{2}w\\d{2}[a-z])$",
         Pattern.CASE_INSENSITIVE
     );
 

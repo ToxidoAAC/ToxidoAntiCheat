@@ -129,7 +129,9 @@ public final class AttackCorrelator {
                 .toLowerCase(Locale.ROOT);
             if ("net.minecraft.class_2824".equals(packetClass)
                 || simple.contains("serverboundinteractpacket")
-                || simple.contains("playerinteractentityc2spacket")) {
+                || simple.contains("playerinteractentityc2spacket")
+                || simple.contains("serverboundattackpacket")
+                || matchesProfilePacket(packet)) {
                 AgentMain.debug(
                     "[PACKET] candidate class=" + packetClass
                         + " attack=false entity=" + result.entityId
@@ -439,5 +441,18 @@ public final class AttackCorrelator {
         while (!events.isEmpty() && events.peekFirst().timeMs < now - 2000) {
             events.removeFirst();
         }
+    }
+
+    private static boolean matchesProfilePacket(Object packet) {
+        VersionProfile profile = VersionProfiles.active();
+        if (profile == null || profile.packetClass == null || packet == null) {
+            return false;
+        }
+        Class<?> type = packet.getClass();
+        if (profile.packetClass.equals(type.getName())) {
+            return true;
+        }
+        return profile.packetClass.indexOf('.') < 0
+            && profile.packetClass.equals(type.getSimpleName());
     }
 }

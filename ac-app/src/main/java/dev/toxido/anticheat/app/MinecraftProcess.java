@@ -32,7 +32,7 @@ public record MinecraftProcess(
     private static final Pattern UUID_PATTERN =
         Pattern.compile("--uuid\\s+(?:\"([^\"]*)\"|(\\S+))");
     private static final Pattern VERSION_PATTERN =
-        Pattern.compile("--version\\s+(?:\"([^\"]*)\"|(\\S+))");
+        Pattern.compile("--version\\s+(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))");
     private static final Pattern GAME_DIR_PATTERN =
         Pattern.compile("--gameDir\\s+(?:\"([^\"]*)\"|(\\S+))");
 
