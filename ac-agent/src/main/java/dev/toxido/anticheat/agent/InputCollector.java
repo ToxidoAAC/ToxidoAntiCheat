@@ -17,8 +17,11 @@ public final class InputCollector {
     private final Consumer<InputEvent> sink;
     private final Runnable onReady;
     private final AtomicBoolean ready = new AtomicBoolean(false);
+    private final AtomicBoolean stopped = new AtomicBoolean(false);
+    private final AtomicBoolean hookRegistered = new AtomicBoolean(false);
     private volatile Process process;
     private volatile boolean controllerDown;
+    private volatile long lastStartAt;
 
     public InputCollector(Path helper, Consumer<InputEvent> sink, Runnable onReady) {
         this.helper = helper;
@@ -26,7 +29,40 @@ public final class InputCollector {
         this.onReady = onReady;
     }
 
-    public boolean start() {
+    /**
+     * Yardimciyi gerektiginde yeniden baslatir. Surec hala ayaktaysa dokunmaz;
+     * coktu veya hic baslamadiysa en fazla 5 saniyede bir yeni deneme yapar.
+     */
+    public synchronized boolean ensureStarted() {
+        if (stopped.get()) {
+            return false;
+        }
+        Process current = process;
+        if (current != null && current.isAlive()) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastStartAt < 5000L) {
+            return false;
+        }
+        lastStartAt = now;
+        return start();
+    }
+
+    /** Yardimciyi kalici olarak durdurur; sonraki ensureStarted cagrilari bos doner. */
+    public void stop() {
+        stopped.set(true);
+        ready.set(false);
+        Process current = process;
+        if (current != null) {
+            current.destroy();
+        }
+    }
+
+    public synchronized boolean start() {
+        if (stopped.get()) {
+            return false;
+        }
         if (helper == null || !Files.isRegularFile(helper)) {
             AgentMain.log("Fare yardimcisi bulunamadi: " + helper);
             return false;
@@ -39,18 +75,20 @@ public final class InputCollector {
                 Long.toString(ProcessHandle.current().pid())
             );
             builder.redirectErrorStream(true);
-            process = builder.start();
+            Process started = builder.start();
+            process = started;
 
-            Thread reader = new Thread(this::readLoop, "40x1d0AC-input-reader");
+            Thread reader = new Thread(
+                () -> readLoop(started), "40x1d0AC-input-reader"
+            );
             reader.setDaemon(true);
             reader.start();
 
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                Process current = process;
-                if (current != null) {
-                    current.destroy();
-                }
-            }, "40x1d0AC-input-stop"));
+            if (hookRegistered.compareAndSet(false, true)) {
+                Runtime.getRuntime().addShutdownHook(new Thread(
+                    this::stop, "40x1d0AC-input-stop"
+                ));
+            }
             return true;
         } catch (Exception exception) {
             AgentMain.log("Fare yardimcisi baslatilamadi: " + exception.getMessage());
@@ -66,8 +104,7 @@ public final class InputCollector {
         return controllerDown;
     }
 
-    private void readLoop() {
-        Process current = process;
+    private void readLoop(Process current) {
         if (current == null) {
             return;
         }
@@ -81,8 +118,10 @@ public final class InputCollector {
         } catch (Exception exception) {
             AgentMain.log("Fare yardimcisi okunamadi: " + exception.getMessage());
         } finally {
-            ready.set(false);
-            AgentMain.log("Fare yardimcisi kapandi.");
+            if (process == current) {
+                ready.set(false);
+                AgentMain.log("Fare yardimcisi kapandi.");
+            }
         }
     }
 

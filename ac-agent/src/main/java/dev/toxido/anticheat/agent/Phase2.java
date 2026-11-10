@@ -26,6 +26,11 @@ public final class Phase2 {
     private static volatile String inputReason = "not_started";
     private static volatile String jvmMain = "unknown";
     private static volatile long jvmPid = -1L;
+    private static volatile int installAttempts;
+    private static volatile long nettyTickAt;
+    private static volatile String nettyDetail = "not_started";
+    private static volatile boolean inputWatchStarted;
+    private static volatile int inputFailures;
 
     private Phase2() {
     }
@@ -123,28 +128,45 @@ public final class Phase2 {
         installReason = "waiting_for_attack_class";
         int attempts = 0;
         while (true) {
-            VersionResolver.Target resolved = target;
-            if (resolved == null) {
-                resolved = VersionResolver.resolve(
-                    instrumentation, versionHint, gameDir, profileName, false
+            try {
+                VersionResolver.Target resolved = target;
+                if (resolved == null) {
+                    resolved = VersionResolver.resolve(
+                        instrumentation, versionHint, gameDir, profileName, false
+                    );
+                    if (resolved != null) {
+                        target = resolved;
+                    }
+                }
+
+                if (resolved != null) {
+                    // Paket kaynagi Netty pipeline'dir; Minecraft bytecode'una
+                    // hook enjekte edilmez. Attack hook yalnizca surum/loader
+                    // bilgisini ve yedek sinyal yolunu hazirlar.
+                    hookStatus = "off";
+                    reason = "netty_waiting";
+                    installReason = "attack_hook_ready";
+                    startCollector(client, resolved);
+                    startInputWatch();
+                    return;
+                }
+
+                attempts++;
+                installAttempts = attempts;
+                if (attempts == 30) {
+                    AgentMain.log("Attack sinifi henuz yuklenmedi; beklemeye devam ediliyor.");
+                }
+            } catch (Throwable throwable) {
+                // Oyun acilirken siniflar yarim yuklu olabilir. Tek bir hata
+                // kurulum thread'ini oldurmemeli; artan bekleme ile yeniden
+                // denenir, aksi halde triggerbot sonsuza kadar kapali kalir.
+                attempts++;
+                installAttempts = attempts;
+                installReason = "install_retry";
+                AgentMain.log(
+                    "Kurulum denemesi " + attempts + " basarisiz: " + throwable
                 );
-                target = resolved;
-            }
-
-            if (resolved != null) {
-                // Paket kaynagi Netty pipeline'dir; Minecraft bytecode'una
-                // hook enjekte edilmez. Attack hook yalnizca surum/loader
-                // bilgisini ve yedek sinyal yolunu hazirlar.
-                hookStatus = "off";
-                reason = "netty_waiting";
-                installReason = "attack_hook_ready";
-                startCollector(client, resolved);
-                return;
-            }
-
-            attempts++;
-            if (attempts == 30) {
-                AgentMain.log("Attack sinifi henuz yuklenmedi; beklemeye devam ediliyor.");
+                emitCapability();
             }
             sleep(attempts < 30 ? 1000L : 5000L);
         }
@@ -164,10 +186,7 @@ public final class Phase2 {
                     current.onInput(event);
                 }
             },
-            () -> {
-                inputReason = input != null && input.isReady() ? "ready" : "starting";
-                emitCapability();
-            }
+            () -> markInputReady()
         );
         correlator = new AttackCorrelator(resolved, collector, client::sendTrigger);
         holder[0] = correlator;
@@ -188,14 +207,74 @@ public final class Phase2 {
         HookBridge.setPacketSink(correlator::onPacket);
         correlator.setPacketSourceActive("active".equals(packetStatus));
 
-        if (!input.start()) {
-            reason = "input_helper_missing";
-            inputReason = "input_helper_missing";
-            AgentMain.log("Fare yardimcisi baslatilamadi; triggerbot degraded.");
+        if (!input.ensureStarted()) {
+            inputReason = "retry";
+            AgentMain.log("Fare yardimcisi henuz baslatilamadi; yeniden denenecek.");
         } else {
             inputReason = input.isReady() ? "ready" : "starting";
         }
+        startInputWatch();
         emitCapability();
+    }
+
+    private static void markInputReady() {
+        inputFailures = 0;
+        inputReason = "ready";
+        if ("input_helper_missing".equals(reason)) {
+            reason = "active".equals(packetStatus) ? "netty_active" : "netty_waiting";
+        }
+        emitCapability();
+    }
+
+    private static synchronized void startInputWatch() {
+        if (inputWatchStarted) {
+            return;
+        }
+        inputWatchStarted = true;
+        Thread watcher = new Thread(
+            Phase2::inputWatchLoop, "40x1d0AC-input-watch"
+        );
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    private static void inputWatchLoop() {
+        while (true) {
+            sleep(5000L);
+            try {
+                InputCollector current = input;
+                if (current == null) {
+                    continue;
+                }
+                if (!current.isReady()) {
+                    current.ensureStarted();
+                }
+                boolean ready = current.isReady();
+                inputFailures = ready ? 0 : inputFailures + 1;
+                String next = ready
+                    ? "ready"
+                    : (inputFailures >= 6 ? "input_helper_missing" : "retry");
+                boolean changed = !next.equals(inputReason);
+                inputReason = next;
+                if ("input_helper_missing".equals(reason) && ready) {
+                    reason = "active".equals(packetStatus) ? "netty_active" : "netty_waiting";
+                    changed = true;
+                }
+                if (changed) {
+                    emitCapability();
+                }
+            } catch (Throwable throwable) {
+                AgentMain.log("Fare yardimcisi izleme hatasi: " + throwable);
+            }
+        }
+    }
+
+    /** Netty halkasinin canli oldugunu ve son durumunu kaydeder. */
+    static void nettyHeartbeat(String detail) {
+        nettyTickAt = System.currentTimeMillis();
+        if (detail != null && !detail.isEmpty()) {
+            nettyDetail = detail;
+        }
     }
 
     static void nettyWaiting(String nettyReason) {
@@ -291,6 +370,9 @@ public final class Phase2 {
         } else if ("off".equals(packetStatus) || "waiting".equals(packetStatus)) {
             currentReason = packetReason;
         }
+        long nettyAge = nettyTickAt == 0L
+            ? -1L
+            : (System.currentTimeMillis() - nettyTickAt) / 1000L;
         return "{\"triggerbot\":" + Json.quote(trigger)
             + ",\"injection\":" + Json.quote("active")
             + ",\"version\":" + Json.quote(version)
@@ -305,6 +387,9 @@ public final class Phase2 {
             + ",\"packet_hook\":" + Json.quote(packetHook)
             + ",\"packet_reason\":" + Json.quote(packetReason)
             + ",\"install\":" + Json.quote(installReason)
+            + ",\"install_attempts\":" + installAttempts
+            + ",\"netty_detail\":" + Json.quote(nettyDetail)
+            + ",\"netty_age\":" + nettyAge
             + ",\"input\":" + Json.quote(inputStatus)
             + ",\"input_reason\":" + Json.quote(currentInputReason)
             + ",\"reason\":" + Json.quote(currentReason) + "}";

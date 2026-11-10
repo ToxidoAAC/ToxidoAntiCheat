@@ -76,8 +76,9 @@ final class NettyHook {
         Class<?> minecraftClass = null;
         while (true) {
             try {
-                // Vanilla istemcilerde Minecraft sinifi obfuscated oldugu
-                // icin once surumu/profile'i bul, sonra sinifi profile gore ara.
+                Phase2.nettyHeartbeat(
+                    profile == null ? "loop:detecting" : "loop:" + profile.id
+                );
                 if (profile == null) {
                     GameVersionDetector.Result early = GameVersionDetector.detect(
                         null, gameDir, profileName
@@ -105,7 +106,7 @@ final class NettyHook {
                     continue;
                 }
 
-                if (profile == null) {
+                if (profile == null || !profileMatches(profile, minecraftClass)) {
                     GameVersionDetector.Result detected = GameVersionDetector.detect(
                         minecraftClass, gameDir, profileName
                     );
@@ -116,6 +117,12 @@ final class NettyHook {
                         state(client, "unsupported_version " + detected.summary());
                         sleep();
                         continue;
+                    }
+                    if (profile != null && !profile.id.equals(selected.id)) {
+                        AgentMain.log(
+                            "Surum profili duzeltildi: " + profile.id
+                                + " -> " + selected.id + " (" + detected.summary() + ")"
+                        );
                     }
                     profile = selected;
                     VersionProfiles.setActive(selected);
@@ -345,6 +352,9 @@ final class NettyHook {
 
     private static void state(AgentClient client, String reason) {
         String value = trim(reason, 220);
+        // Heartbeat dedupe'den once yazilir: ayni durum tekrar etse bile
+        // panoda "netty_age" canli kalir.
+        Phase2.nettyHeartbeat("state:" + value);
         if (value.equals(lastState)) {
             return;
         }
@@ -778,6 +788,18 @@ final class NettyHook {
         }
         return expected.indexOf('.') < 0
             && expected.equals(type.getSimpleName());
+    }
+
+    /**
+     * Bulunan Minecraft sinifi aktif profilin bekledigi sinifla uyusuyor mu?
+     * Erken secim loader'i goremedigi icin intermediary profile kilitlenmis
+     * olabilir; sinif gorundugunde bu kontrol profilin duzeltilmesini saglar.
+     */
+    private static boolean profileMatches(VersionProfile active, Class<?> type) {
+        if (active == null || active.minecraftClass == null) {
+            return true;
+        }
+        return classMatches(type, active.minecraftClass);
     }
 
     private static boolean isChannelType(Class<?> type) {

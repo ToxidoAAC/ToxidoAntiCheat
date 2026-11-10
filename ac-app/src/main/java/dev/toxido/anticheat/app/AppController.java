@@ -251,17 +251,25 @@ public final class AppController implements Runnable, AgentBridge.Listener {
      */
     private void logStatus(JsonObject capability) {
         String install = text(capability, "install");
-        String line = "Durum: surum=" + text(capability, "version")
+        long nettyAge = number(capability, "netty_age", -1L);
+        // Yasa bagli kisim dedupe anahtarina girmez; aksi halde her yenileme
+        // yeni bir satir gibi gorunup kanali doldurur.
+        String core = "Durum: surum=" + text(capability, "version")
+            + " kaynak=" + text(capability, "version_source")
             + " loader=" + text(capability, "loader")
             + " mapping=" + text(capability, "mapping")
             + " profil=" + text(capability, "profile")
+            + " | jvm=" + text(capability, "jvm_main")
             + " | packet=" + text(capability, "packet")
             + " (" + text(capability, "packet_reason") + ")"
             + " install=" + install
+            + "/" + text(capability, "install_attempts")
+            + " netty=" + text(capability, "netty_detail")
             + " | trigger=" + text(capability, "triggerbot")
             + " input=" + text(capability, "input")
             + " (" + text(capability, "input_reason") + ")";
-        if (statusLogged.add(line)) {
+        String line = nettyAge < 0L ? core : core + " [" + nettyAge + "s]";
+        if (statusLogged.add(core)) {
             reporter.log(line);
         }
     }
@@ -452,6 +460,18 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private static String text(JsonObject payload, String key) {
         JsonElement value = payload.get(key);
         return value == null || value.isJsonNull() ? "" : value.getAsString();
+    }
+
+    private static long number(JsonObject payload, String key, long fallback) {
+        JsonElement value = payload.get(key);
+        if (value == null || value.isJsonNull()) {
+            return fallback;
+        }
+        try {
+            return value.getAsLong();
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
     }
 
     @Override
