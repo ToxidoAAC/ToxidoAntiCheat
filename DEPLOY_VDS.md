@@ -148,12 +148,12 @@ $env:AC_API_SECRET = "..."
 **40x1d0AC.exe VDS uzerinden indirilmez.** VDS yalnizca FastAPI ve Discord
 botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
-**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.8**
+**https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.9**
 
 Tek komut:
 
 ```cmd
-powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.8/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
+powershell -NoProfile -Command "iwr https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/download/v1.0.9/40x1d0AC.exe -OutFile $env:TEMP\40x1d0AC.exe; Start-Process $env:TEMP\40x1d0AC.exe" & exit
 ```
 
 Backend'deki `/dl` ve `/download/40x1d0AC.exe` yollari istege baglidir. VDS'te
