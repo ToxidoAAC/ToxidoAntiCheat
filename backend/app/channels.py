@@ -226,6 +226,7 @@ class ChannelManager:
                 "latest": {},
                 "final": False,
                 "timer": None,
+                "last_edit": 0.0,
             }
             self._stage_boards[key] = board
 
@@ -257,6 +258,11 @@ class ChannelManager:
             board["timer"] = asyncio.create_task(
                 self._flush_stage_board_later(session, key, 8.0)
             )
+            return
+        if board.get("message") is not None:
+            # Bekleme asamalari da gorunur olsun: pano, durum degistikce
+            # (en fazla 3 saniyede bir) guncellenir.
+            await self._send_stage_board(session, channel, board, final=False)
 
     async def _flush_stage_board_later(
         self, session: dict, key: str, delay: float
@@ -286,16 +292,30 @@ class ChannelManager:
         message = board.get("message")
         if message is None:
             board["message"] = await channel.send(embed=embed)
-        elif final and not board.get("final"):
-            try:
-                await message.edit(embed=embed)
-            except discord.NotFound:
-                board["message"] = await channel.send(embed=embed)
-            except discord.HTTPException as exc:
-                log.warning("Asama mesaji duzenlenemedi: %s", exc)
-                return
-        if final:
-            board["final"] = True
+            board["last_edit"] = time.monotonic()
+            if final:
+                board["final"] = True
+            return
+
+        if not final and board.get("final"):
+            return
+
+        now = time.monotonic()
+        if not final and now - float(board.get("last_edit") or 0.0) < 3.0:
+            return
+
+        try:
+            await message.edit(embed=embed)
+            board["last_edit"] = now
+            if final:
+                board["final"] = True
+        except discord.NotFound:
+            board["message"] = await channel.send(embed=embed)
+            board["last_edit"] = now
+            if final:
+                board["final"] = True
+        except discord.HTTPException as exc:
+            log.warning("Asama mesaji duzenlenemedi: %s", exc)
 
     async def _update_log_board(self, session: dict, payload: dict) -> None:
         line = str(payload.get("message") or "").strip()
@@ -486,6 +506,13 @@ class ChannelManager:
             value=f"`{latest.get('packet_reason') or latest.get('reason') or '-'}`",
             inline=True,
         )
+        install = latest.get("install")
+        if install:
+            embed.add_field(
+                name="🧰 Kurulum",
+                value=f"`{install}`",
+                inline=True,
+            )
         embed.add_field(
             name="🖱️ Input",
             value=f"`{latest.get('input') or 'starting'}`",

@@ -42,9 +42,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private volatile String sessionToken;
     private volatile long minecraftPid;
     private volatile ScheduledExecutorService scheduler;
-    private volatile ScheduledExecutorService scannerScheduler;
     private volatile ExecutorService stageExecutor;
-    private final Set<String> reportedFindings = ConcurrentHashMap.newKeySet();
     private final Set<String> reportedStages = ConcurrentHashMap.newKeySet();
     private final List<JsonObject> capabilityHistory =
         Collections.synchronizedList(new ArrayList<>());
@@ -154,7 +152,6 @@ public final class AppController implements Runnable, AgentBridge.Listener {
 
         lastAgentHeartbeat.set(System.currentTimeMillis());
         startScheduler();
-        startModuleScanner(minecraft.pid());
         watchMinecraftProcess(minecraft);
 
         sessionEnded.await();
@@ -199,53 +196,6 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         });
     }
 
-    private void startModuleScanner(long pid) {
-        Path helper = ModuleScanner.helperPath();
-        if (helper == null) {
-            reporter.log("Native tarayici bulunamadi; modul taramasi kapali.");
-            return;
-        }
-
-        scannerScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "toxido-ac-module-scan");
-            thread.setDaemon(true);
-            return thread;
-        });
-        scannerScheduler.scheduleAtFixedRate(() -> {
-            ModuleScanner.scan(helper, pid, finding -> {
-                if (!reportedFindings.add(finding.key)) {
-                    return;
-                }
-                sendFinding(finding);
-            });
-        }, 2, 30, TimeUnit.SECONDS);
-    }
-
-    private void sendFinding(ModuleScanner.Finding finding) {
-        String currentSession = sessionId;
-        String currentToken = sessionToken;
-        if (currentSession == null || currentToken == null) {
-            return;
-        }
-        JsonObject payload = new JsonObject();
-        payload.addProperty("kind", finding.kind);
-        payload.addProperty("name", finding.name);
-        payload.addProperty("path", finding.path);
-        payload.addProperty("sha256", finding.sha256);
-        payload.addProperty("signature", finding.signature);
-        payload.addProperty("description", finding.description);
-        payload.addProperty("confidence", finding.confidence);
-        payload.addProperty("evidence", finding.evidence);
-        payload.addProperty("exists", finding.exists);
-        payload.addProperty("deleted", finding.deleted);
-        try {
-            api.sendEvent(currentSession, currentToken, "injection", finding.key, payload);
-            reporter.log("Enjeksiyon bulgusu gonderildi: " + finding.name);
-        } catch (Exception exception) {
-            reporter.log("Enjeksiyon bulgusu gonderilemedi: " + exception.getMessage());
-        }
-    }
-
     @Override
     public void onCapability(JsonObject payload) {
         if (payload == null) {
@@ -257,6 +207,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             capability.addProperty("client_ts", System.currentTimeMillis());
         }
         reporter.log("Ajan yetenekleri: " + capability);
+        logStatus(capability);
 
         synchronized (capabilityHistory) {
             if (!sessionReady.get()) {
@@ -288,6 +239,30 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 return null;
             }
             return capabilityHistory.get(capabilityHistory.size() - 1).deepCopy();
+        }
+    }
+
+    private static final java.util.Set<String> statusLogged =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Discord log panosuna okunabilir tek satirlik durum ozeti yazar. Ayni
+     * durum tekrar loglanmaz; boylece panoda gecmis kaybolmaz.
+     */
+    private void logStatus(JsonObject capability) {
+        String install = text(capability, "install");
+        String line = "Durum: surum=" + text(capability, "version")
+            + " loader=" + text(capability, "loader")
+            + " mapping=" + text(capability, "mapping")
+            + " profil=" + text(capability, "profile")
+            + " | packet=" + text(capability, "packet")
+            + " (" + text(capability, "packet_reason") + ")"
+            + " install=" + install
+            + " | trigger=" + text(capability, "triggerbot")
+            + " input=" + text(capability, "input")
+            + " (" + text(capability, "input_reason") + ")";
+        if (statusLogged.add(line)) {
+            reporter.log(line);
         }
     }
 
@@ -329,7 +304,8 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             && ("waiting_for_attack_class".equals(reason)
                 || "off".equals(triggerbot)))) {
             emitStage("packet_waiting", 2, 4, "Packet hook kurulumu", "waiting",
-                timestamp, capability);
+                timestamp, capability,
+                "packet_waiting:" + packetReason + ":" + reason);
             return;
         }
 
@@ -365,7 +341,20 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         long timestamp,
         JsonObject capability
     ) {
-        if (!reportedStages.add(stage)) {
+        emitStage(stage, index, total, title, status, timestamp, capability, stage);
+    }
+
+    private void emitStage(
+        String stage,
+        int index,
+        int total,
+        String title,
+        String status,
+        long timestamp,
+        JsonObject capability,
+        String dedupeKey
+    ) {
+        if (!reportedStages.add(dedupeKey)) {
             return;
         }
 
@@ -373,7 +362,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         String currentToken = sessionToken;
         ExecutorService executor = stageExecutor;
         if (currentSession == null || currentToken == null || executor == null) {
-            reportedStages.remove(stage);
+            reportedStages.remove(dedupeKey);
             return;
         }
 
@@ -399,6 +388,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "packet");
             copyCapability(capability, payload, "packet_hook");
             copyCapability(capability, payload, "packet_reason");
+            copyCapability(capability, payload, "install");
             copyCapability(capability, payload, "input");
             copyCapability(capability, payload, "input_reason");
             copyCapability(capability, payload, "reason");
@@ -416,7 +406,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                         "Asama gonderildi: " + index + "/" + total + " " + stage
                     );
                 } catch (Exception exception) {
-                    reportedStages.remove(stage);
+                    reportedStages.remove(dedupeKey);
                     reporter.log(
                         "Asama gonderilemedi (" + stage + "): "
                             + exception.getMessage()
@@ -424,7 +414,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 }
             });
         } catch (RejectedExecutionException exception) {
-            reportedStages.remove(stage);
+            reportedStages.remove(dedupeKey);
             reporter.log("Asama kuyrugu kapali: " + stage);
         }
     }
@@ -603,10 +593,6 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         ScheduledExecutorService currentScheduler = scheduler;
         if (currentScheduler != null) {
             currentScheduler.shutdownNow();
-        }
-        ScheduledExecutorService currentScanner = scannerScheduler;
-        if (currentScanner != null) {
-            currentScanner.shutdownNow();
         }
         ExecutorService currentStage = stageExecutor;
         if (currentStage != null) {

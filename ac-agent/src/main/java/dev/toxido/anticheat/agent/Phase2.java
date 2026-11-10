@@ -13,7 +13,9 @@ public final class Phase2 {
     private static volatile String hookStatus = "off";
     private static volatile String reason = "not_started";
     private static volatile String packetStatus = "waiting";
-    private static volatile String packetReason = "starting";
+    private static volatile String packetReason = "netty_starting";
+    private static volatile String installReason = "not_started";
+    private static volatile String lastCapability;
     private static volatile String packetHook = "-";
     private static volatile AgentClient clientRef;
     private static volatile String detectedVersion = "unknown";
@@ -66,6 +68,46 @@ public final class Phase2 {
         );
         installer.setDaemon(true);
         installer.start();
+
+        Thread refresher = new Thread(
+            () -> refreshLoop(client),
+            "40x1d0AC-capability-refresh"
+        );
+        refresher.setDaemon(true);
+        refresher.start();
+    }
+
+    /**
+     * Durum degistiginde capability gonderir; degismese bile 30 saniyede bir
+     * tekrar gonderir. Boylece ilk gonderim kaybolsa bile pano guncellenir.
+     */
+    private static void refreshLoop(AgentClient client) {
+        long lastSentAt = 0L;
+        while (true) {
+            sleep(5000L);
+            try {
+                String current = capability();
+                long now = System.currentTimeMillis();
+                boolean changed = !current.equals(lastCapability);
+                if (changed || now - lastSentAt >= 30_000L) {
+                    lastCapability = current;
+                    lastSentAt = now;
+                    client.sendCapability(current);
+                }
+            } catch (Throwable throwable) {
+                AgentMain.log("Capability yenileme hatasi: " + throwable);
+            }
+        }
+    }
+
+    private static void emitCapability() {
+        AgentClient client = clientRef;
+        if (client == null) {
+            return;
+        }
+        String current = capability();
+        lastCapability = current;
+        client.sendCapability(current);
     }
 
     private static void installWhenReady(
@@ -78,6 +120,7 @@ public final class Phase2 {
         // Minecraft siniflari oyun acilirken gec yuklenir (genelde dunyaya
         // girince). Tek seferlik cozumleme yerine hazir olana kadar bekle.
         reason = "waiting_for_attack_class";
+        installReason = "waiting_for_attack_class";
         int attempts = 0;
         while (true) {
             VersionResolver.Target resolved = target;
@@ -94,6 +137,7 @@ public final class Phase2 {
                 // bilgisini ve yedek sinyal yolunu hazirlar.
                 hookStatus = "off";
                 reason = "netty_waiting";
+                installReason = "attack_hook_ready";
                 startCollector(client, resolved);
                 return;
             }
@@ -122,7 +166,7 @@ public final class Phase2 {
             },
             () -> {
                 inputReason = input != null && input.isReady() ? "ready" : "starting";
-                client.sendCapability(capability());
+                emitCapability();
             }
         );
         correlator = new AttackCorrelator(resolved, collector, client::sendTrigger);
@@ -151,7 +195,7 @@ public final class Phase2 {
         } else {
             inputReason = input.isReady() ? "ready" : "starting";
         }
-        client.sendCapability(capability());
+        emitCapability();
     }
 
     static void nettyWaiting(String nettyReason) {
@@ -165,10 +209,7 @@ public final class Phase2 {
         packetReason = nettyReason;
         packetHook = "-";
         if (changed) {
-            AgentClient client = clientRef;
-            if (client != null) {
-                client.sendCapability(capability());
-            }
+            emitCapability();
         }
     }
 
@@ -189,10 +230,7 @@ public final class Phase2 {
         mapping = detected.mapping;
         profileId = selectedProfile == null ? "-" : selectedProfile;
         if (changed) {
-            AgentClient client = clientRef;
-            if (client != null) {
-                client.sendCapability(capability());
-            }
+            emitCapability();
         }
     }
 
@@ -209,10 +247,7 @@ public final class Phase2 {
         if (current != null) {
             current.setPacketSourceActive(true);
         }
-        AgentClient client = clientRef;
-        if (client != null) {
-            client.sendCapability(capability());
-        }
+        emitCapability();
     }
 
     private static void sleep(long millis) {
@@ -269,6 +304,7 @@ public final class Phase2 {
             + ",\"packet\":" + Json.quote(packetStatus)
             + ",\"packet_hook\":" + Json.quote(packetHook)
             + ",\"packet_reason\":" + Json.quote(packetReason)
+            + ",\"install\":" + Json.quote(installReason)
             + ",\"input\":" + Json.quote(inputStatus)
             + ",\"input_reason\":" + Json.quote(currentInputReason)
             + ",\"reason\":" + Json.quote(currentReason) + "}";
