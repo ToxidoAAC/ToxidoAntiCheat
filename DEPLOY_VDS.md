@@ -96,7 +96,7 @@ Invoke-RestMethod http://65.108.39.249:25364/health
 Beklenen cevap:
 
 ```json
-{"ok":true,"version":"0.2.3","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"alert_filtered":0,"heartbeat_timeout_seconds":120,"injection_alerts":true,"injection_alert_kinds":["cheat_signature","external_agent","jvm_argument","mod_file"],"injection_min_confidence":"high"}
+{"ok":true,"version":"0.2.4","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"alert_filtered":0,"heartbeat_timeout_seconds":120,"injection_alerts":true,"injection_alert_kinds":["cheat_signature","external_agent","jvm_argument","mod_file"],"injection_min_confidence":"high"}
 ```
 
 `alert_queue` Discord uyarilarinin bekleyen sayisidir; `alert_dropped`
