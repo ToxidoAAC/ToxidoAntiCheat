@@ -22,24 +22,20 @@ internal static class Program
                 Environment.SpecialFolder.LocalApplicationData);
             string engineRoot = Path.Combine(local, "40x1d0AC", "engine");
             string engine = Path.Combine(engineRoot, PayloadId);
-            string java = Path.Combine(engine, "runtime", "bin", "javaw.exe");
-            string app = Path.Combine(engine, "app", "ac-app.jar");
-            string config = Path.Combine(engine, "app", "client.properties");
-            string agent = Path.Combine(engine, "app", "ac-agent.jar");
-            string hook = Path.Combine(engine, "app", "ac-agent-hook.jar");
-            string input = Path.Combine(engine, "app", "40x1d0AC-input.exe");
 
-            if (!File.Exists(java) || !File.Exists(app)
-                || !File.Exists(config) || !File.Exists(agent)
-                || !File.Exists(hook) || !File.Exists(input))
+            string java;
+            string app;
+            string config;
+            string agent;
+            string hook;
+            string input;
+            Resolve(engine, out java, out app, out config, out agent, out hook, out input);
+
+            if (!IsInstalled(java, app, config, agent, hook, input))
             {
+                // Mevcut kurulum gecerliyse yeniden cikarma yapilmaz.
                 engine = Extract(engine);
-                java = Path.Combine(engine, "runtime", "bin", "javaw.exe");
-                app = Path.Combine(engine, "app", "ac-app.jar");
-                config = Path.Combine(engine, "app", "client.properties");
-                agent = Path.Combine(engine, "app", "ac-agent.jar");
-                hook = Path.Combine(engine, "app", "ac-agent-hook.jar");
-                input = Path.Combine(engine, "app", "40x1d0AC-input.exe");
+                Resolve(engine, out java, out app, out config, out agent, out hook, out input);
             }
 
             Validate(java, app, config, agent, hook, input);
@@ -53,7 +49,6 @@ internal static class Program
             info.WorkingDirectory = engine;
             info.UseShellExecute = false;
             info.CreateNoWindow = true;
-            info.WindowStyle = ProcessWindowStyle.Hidden;
 
             Process child = Process.Start(info);
             if (child == null)
@@ -72,6 +67,35 @@ internal static class Program
                 0x00000010);
             return 1;
         }
+    }
+
+    private static void Resolve(
+        string engine,
+        out string java,
+        out string app,
+        out string config,
+        out string agent,
+        out string hook,
+        out string input)
+    {
+        java = Path.Combine(engine, "runtime", "bin", "javaw.exe");
+        app = Path.Combine(engine, "app", "ac-app.jar");
+        config = Path.Combine(engine, "app", "client.properties");
+        agent = Path.Combine(engine, "app", "ac-agent.jar");
+        hook = Path.Combine(engine, "app", "ac-agent-hook.jar");
+        input = Path.Combine(engine, "app", "40x1d0AC-input.exe");
+    }
+
+    private static bool IsInstalled(params string[] files)
+    {
+        foreach (string path in files)
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void Validate(params string[] files)
@@ -96,52 +120,100 @@ internal static class Program
             Directory.CreateDirectory(parent);
         }
 
-        if (Directory.Exists(target))
-        {
-            try
-            {
-                Directory.Delete(target, true);
-            }
-            catch
-            {
-                target = target + "-"
-                    + Guid.NewGuid().ToString("N").Substring(0, 8);
-            }
-        }
-
-        string temp = Path.Combine(
-            Path.GetTempPath(),
-            "40x1d0AC-" + Guid.NewGuid().ToString("N") + ".zip");
+        string staging = target + ".tmp-"
+            + Guid.NewGuid().ToString("N").Substring(0, 8);
 
         try
         {
-            using (Stream input = Assembly.GetExecutingAssembly()
+            Directory.CreateDirectory(staging);
+
+            // Paket dogrudan bellekten acilir; gecici zip dosyasi diske yazilmaz.
+            using (Stream resource = Assembly.GetExecutingAssembly()
                 .GetManifestResourceStream("payload.zip"))
             {
-                if (input == null)
+                if (resource == null)
                 {
                     throw new Exception("Gomulu paket bulunamadi.");
                 }
-                using (FileStream output = File.Create(temp))
+
+                using (MemoryStream memory = new MemoryStream())
                 {
-                    input.CopyTo(output);
+                    resource.CopyTo(memory);
+                    memory.Position = 0;
+
+                    using (ZipArchive archive = new ZipArchive(memory, ZipArchiveMode.Read))
+                    {
+                        string root = Path.GetFullPath(staging)
+                            + Path.DirectorySeparatorChar;
+
+                        foreach (ZipArchiveEntry entry in archive.Entries)
+                        {
+                            string name = entry.FullName.Replace(
+                                '/', Path.DirectorySeparatorChar);
+                            if (name.Length == 0)
+                            {
+                                continue;
+                            }
+
+                            string destination = Path.GetFullPath(
+                                Path.Combine(staging, name));
+                            if (!destination.StartsWith(
+                                root, StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new Exception(
+                                    "Gecersiz paket girdisi: " + entry.FullName);
+                            }
+
+                            if (entry.Name.Length == 0)
+                            {
+                                Directory.CreateDirectory(destination);
+                                continue;
+                            }
+
+                            string directory = Path.GetDirectoryName(destination);
+                            if (!String.IsNullOrEmpty(directory))
+                            {
+                                Directory.CreateDirectory(directory);
+                            }
+
+                            using (Stream source = entry.Open())
+                            using (FileStream output = File.Create(destination))
+                            {
+                                source.CopyTo(output);
+                            }
+                        }
+                    }
                 }
             }
 
-            try
+            if (Directory.Exists(target))
             {
-                ZipFile.ExtractToDirectory(temp, target);
-            }
-            finally
-            {
-                try { File.Delete(temp); } catch { }
+                try
+                {
+                    Directory.Delete(target, true);
+                }
+                catch
+                {
+                    target = target + "-"
+                        + Guid.NewGuid().ToString("N").Substring(0, 8);
+                }
             }
 
+            Directory.Move(staging, target);
             return target;
         }
         catch
         {
-            try { File.Delete(temp); } catch { }
+            try
+            {
+                if (Directory.Exists(staging))
+                {
+                    Directory.Delete(staging, true);
+                }
+            }
+            catch
+            {
+            }
             throw;
         }
     }
