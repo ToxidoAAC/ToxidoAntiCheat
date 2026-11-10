@@ -79,10 +79,10 @@ public final class ApiClient {
         );
     }
 
-    public void heartbeat(String sessionId, String token) throws Exception {
+    public JsonObject heartbeat(String sessionId, String token) throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("session_id", sessionId);
-        post("/api/v1/session/heartbeat", gson.toJson(body), token, true);
+        return post("/api/v1/session/heartbeat", gson.toJson(body), token, true);
     }
 
     public void endSession(String sessionId, String token, String reason) throws Exception {

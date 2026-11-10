@@ -51,6 +51,8 @@ public final class AgentClient implements Runnable {
             while ((line = in.readLine()) != null) {
                 if (line.contains("\"type\":\"ping\"")) {
                     send("{\"type\":\"pong\"}");
+                } else if (line.contains("\"type\":\"restart\"")) {
+                    Phase2.restartPipeline();
                 } else if (line.contains("\"type\":\"hello_ack\"")) {
                     flushPending();
                     startHeartbeat();

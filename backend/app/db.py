@@ -72,6 +72,34 @@ class Database:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe "
             "ON events(session_id, event_key) WHERE event_key IS NOT NULL"
         )
+        async with self.conn.execute("PRAGMA table_info(sessions)") as cursor:
+            session_columns = {row["name"] for row in await cursor.fetchall()}
+        if "restart_requested" not in session_columns:
+            await self.conn.execute(
+                "ALTER TABLE sessions ADD COLUMN restart_requested "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+
+    async def request_restart(self, session_id: str) -> bool:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "UPDATE sessions SET restart_requested = 1 "
+            "WHERE id = ? AND status = 'active'",
+            (session_id,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def take_restart(self, session_id: str) -> bool:
+        """Bekleyen /restart istegini bir kez tuketir."""
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "UPDATE sessions SET restart_requested = 0 "
+            "WHERE id = ? AND restart_requested = 1",
+            (session_id,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
 
     async def close(self) -> None:
         if self.conn is not None:

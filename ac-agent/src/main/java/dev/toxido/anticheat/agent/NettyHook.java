@@ -53,6 +53,14 @@ final class NettyHook {
         start(instrumentation, client, "unknown", "", "");
     }
 
+    /** Panelden gelen /restart isteginde profil secimini sifirlar. */
+    static void restart() {
+        profile = null;
+        lastState = "";
+        handlerLoadFailed = false;
+        Phase2.nettyHeartbeat("restart");
+    }
+
     static void start(
         Instrumentation instrumentation,
         AgentClient client,

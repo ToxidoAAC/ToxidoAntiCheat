@@ -69,6 +69,10 @@ public final class GameVersionDetector {
 
     private static volatile Result cached;
 
+    static void clearCache() {
+        cached = null;
+    }
+
     private GameVersionDetector() {
     }
 

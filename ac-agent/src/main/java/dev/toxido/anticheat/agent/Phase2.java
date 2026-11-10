@@ -31,6 +31,12 @@ public final class Phase2 {
     private static volatile String nettyDetail = "not_started";
     private static volatile boolean inputWatchStarted;
     private static volatile int inputFailures;
+    private static volatile Instrumentation agentInstrumentation;
+    private static volatile String agentVersionHint = "unknown";
+    private static volatile String agentGameDir = "";
+    private static volatile String agentProfileName = "";
+    private static final java.util.concurrent.atomic.AtomicBoolean installRunning =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private Phase2() {
     }
@@ -55,6 +61,10 @@ public final class Phase2 {
         jvmMain = mainClass();
         injection = new InjectionScanner(instrumentation, client);
         injection.start();
+        agentInstrumentation = instrumentation;
+        agentVersionHint = versionHint;
+        agentGameDir = gameDir;
+        agentProfileName = profileName;
 
         try {
             NettyHook.start(instrumentation, client, versionHint, gameDir, profileName);
@@ -65,14 +75,7 @@ public final class Phase2 {
             AgentMain.log("Netty hook baslatilamadi: " + throwable);
         }
 
-        Thread installer = new Thread(
-            () -> installWhenReady(
-                instrumentation, client, versionHint, gameDir, profileName
-            ),
-            "40x1d0AC-hook-install"
-        );
-        installer.setDaemon(true);
-        installer.start();
+        startInstaller();
 
         Thread refresher = new Thread(
             () -> refreshLoop(client),
@@ -80,6 +83,47 @@ public final class Phase2 {
         );
         refresher.setDaemon(true);
         refresher.start();
+    }
+
+    private static void startInstaller() {
+        Instrumentation instrumentation = agentInstrumentation;
+        AgentClient client = clientRef;
+        if (instrumentation == null || client == null) {
+            return;
+        }
+        if (!installRunning.compareAndSet(false, true)) {
+            return;
+        }
+        Thread installer = new Thread(
+            () -> installWhenReady(
+                instrumentation, client, agentVersionHint, agentGameDir, agentProfileName
+            ),
+            "40x1d0AC-hook-install"
+        );
+        installer.setDaemon(true);
+        installer.start();
+    }
+
+    /**
+     * Discord panelinden gelen /restart isteginde tespit zincirini bastan
+     * kurar. Eski profil, paket durumu ve surum onbellegi temizlenir.
+     */
+    static void restartPipeline() {
+        AgentMain.log("Yeniden baslatma istendi; tespit bastan kuruluyor.");
+        target = null;
+        hookStatus = "-";
+        packetStatus = "waiting";
+        packetReason = "restart_requested";
+        packetHook = "-";
+        installReason = "restart_requested";
+        installAttempts = 0;
+        reason = "restart_requested";
+        nettyDetail = "restart";
+        nettyTickAt = System.currentTimeMillis();
+        GameVersionDetector.clearCache();
+        NettyHook.restart();
+        emitCapability();
+        startInstaller();
     }
 
     /**
@@ -148,6 +192,7 @@ public final class Phase2 {
                     installReason = "attack_hook_ready";
                     startCollector(client, resolved);
                     startInputWatch();
+                    installRunning.set(false);
                     return;
                 }
 

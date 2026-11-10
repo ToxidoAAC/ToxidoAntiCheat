@@ -225,7 +225,8 @@ async def heartbeat(payload: HeartbeatRequest, request: Request) -> dict:
     if row["status"] != "active":
         raise HTTPException(status_code=409, detail="Oturum aktif degil")
     await _db(request).touch(payload.session_id, utcnow_iso())
-    return {"ok": True}
+    restart = await _db(request).take_restart(payload.session_id)
+    return {"ok": True, "restart": restart}
 
 
 @router.post("/end")

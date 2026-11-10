@@ -51,6 +51,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private final AtomicBoolean sessionReady = new AtomicBoolean(false);
     private final AtomicLong agentAttachedAt = new AtomicLong(0);
     private volatile String stageRunId;
+    private volatile JsonObject lastCapabilityView;
+    private volatile MinecraftProcess game;
+    private final AtomicBoolean reopening = new AtomicBoolean(false);
 
     public AppController(Config config, Reporter reporter) {
         this.config = config;
@@ -76,6 +79,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         }
 
         minecraftPid = minecraft.pid();
+        this.game = minecraft;
         reporter.status(
             "Minecraft bulundu",
             minecraft.username() + " • " + safe(minecraft.version())
@@ -168,10 +172,18 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 if (sessionId != null && sessionToken != null) {
-                    api.heartbeat(sessionId, sessionToken);
+                    JsonObject response = api.heartbeat(sessionId, sessionToken);
+                    if (response != null
+                        && response.has("restart")
+                        && response.get("restart").getAsBoolean()) {
+                        handleRestartRequest("panel");
+                    }
                 }
             } catch (ApiClient.ApiException exception) {
-                if (exception.status() == 409 && ending.get()) {
+                if (exception.status() == 409) {
+                    if (!ending.get()) {
+                        reopenSession("session_closed");
+                    }
                     return;
                 }
                 reporter.log("Heartbeat hatasi: " + exception.getMessage());
@@ -186,6 +198,62 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 triggerEnd("agent_silent");
             }
         }, 5, 5, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Discord'dan gelen /restart istegini uygular: onceki panoyu gecersiz
+     * sayar, ajandan tespiti bastan kurmasini ister ve yeni bir pano acar.
+     */
+    private void handleRestartRequest(String source) {
+        stageRunId = Long.toString(System.currentTimeMillis());
+        reportedStages.clear();
+        statusLogged.clear();
+        reporter.log("Yeniden baslatma istendi (" + source + "); onceki pano birakildi.");
+
+        AgentBridge current = bridge;
+        if (current != null) {
+            current.send("{\"type\":\"restart\"}");
+        }
+
+        emitStage("agent_attached", 1, 4, "Ajan baglandi", "active",
+            System.currentTimeMillis(), lastCapabilityView);
+        JsonObject capability = lastCapabilityView;
+        if (capability != null) {
+            emitCapabilityStages(capability);
+        }
+    }
+
+    /**
+     * Sunucu tarafinda oturum kapanmissa (ornegin heartbeat zaman asimi)
+     * uygulamayi oldurmeden yeni bir oturum ve pano acar.
+     */
+    private void reopenSession(String reason) {
+        MinecraftProcess current = game;
+        if (current == null || !reopening.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            reporter.log("Oturum kapandi (" + reason + "); yeni oturum aciliyor.");
+            ApiClient.StartResult start = api.startSession(
+                current, Instant.now().toString());
+            sessionId = start.sessionId();
+            sessionToken = start.token();
+            stageRunId = Long.toString(System.currentTimeMillis());
+            reportedStages.clear();
+            statusLogged.clear();
+            emitStage("agent_attached", 1, 4, "Ajan baglandi", "active",
+                System.currentTimeMillis(), lastCapabilityView);
+            if (lastCapabilityView != null) {
+                emitCapabilityStages(lastCapabilityView);
+            }
+            reporter.status("Oturum yeniden acildi",
+                current.username() + " • " + safe(current.version()));
+            reporter.log("Yeni oturum: " + start.sessionId());
+        } catch (Exception exception) {
+            reporter.log("Yeni oturum acilamadi: " + exception.getMessage());
+        } finally {
+            reopening.set(false);
+        }
     }
 
     private void startStageExecutor() {
@@ -206,6 +274,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         if (!capability.has("client_ts")) {
             capability.addProperty("client_ts", System.currentTimeMillis());
         }
+        lastCapabilityView = capability;
         reporter.log("Ajan yetenekleri: " + capability);
         logStatus(capability);
 

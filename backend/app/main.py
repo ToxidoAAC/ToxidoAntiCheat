@@ -80,6 +80,17 @@ async def lifespan(app: FastAPI):
     alerts = EventAlertQueue(channels)
     alerts.start()
 
+    if bot is not None:
+        async def _request_restart() -> int:
+            active = await database.active_sessions()
+            requested = 0
+            for row in active:
+                if await database.request_restart(row["id"]):
+                    requested += 1
+            return requested
+
+        bot.restart_handler = _request_restart
+
     app.state.settings = settings
     app.state.db = database
     app.state.bot = bot
