@@ -1,5 +1,21 @@
 # VDS Dagitimi (bot-hosting.cloud)
 
+## 0. Hazir paket (onerilen)
+
+`dist\vds-deploy.zip` guncel backend'i ve VDS ayarlarini icerir:
+
+- `backend\` klasoru (app, main.py, run.py, start.sh, requirements.txt)
+- `backend\.env` **VDS icin hazir**: `HOST=0.0.0.0`, `PORT=25364`, `DRY_RUN=0`
+- Discord token ve API anahtarlari doludur; **zip gizlidir, paylasmayin**
+- `DEPLOY.txt` ve bu belge
+
+Zip'i panelde `/home/container` icine yukleyip acin; `/home/container/backend`
+olusur. Yeniden uretmek icin:
+
+```powershell
+.\scripts\build-vds-zip.ps1
+```
+
 ## Bilinen VDS bilgileri
 
 - Panel: bot-hosting.cloud
@@ -28,7 +44,9 @@ Sunucuda Python 3.10+ ve `python3-venv` bulunmalidir. `start.sh` ilk calismada
 
 ## 2. `.env` olusturma
 
-`backend/.env.example` dosyasini `backend/.env` olarak kopyalayin ve doldurun:
+Hazir pakette `backend\.env` zaten doludur; yalnizca anahtarlari degistirdiyseniz
+duzenleyin. Sifirdan kuracaksaniz `backend/.env.example` dosyasini
+`backend/.env` olarak kopyalayin ve doldurun:
 
 ```dotenv
 DISCORD_TOKEN=...
@@ -60,18 +78,19 @@ INJECTION_MIN_CONFIDENCE=high
 
 ## 3. Baslatma
 
-Dosyalar sunucu kokundeyse panelin startup komutunu su yapin:
-
-```bash
-bash start.sh
-```
-
-Alternatif olarak panelin varsayilan Python komutu `python main.py` ise
-`backend/main.py` de ayni isi yapar. `backend/` klasoru icindeyse:
+Zip `/home/container` icine acildiysa panelin startup komutunu su yapin:
 
 ```bash
 bash backend/start.sh
 ```
+
+Alternatif olarak panelin varsayilan Python komutu `python main.py` ise:
+
+```bash
+cd backend && python main.py
+```
+
+`backend/` klasorunun icindeyken `bash start.sh` de ayni isi yapar.
 
 Ilk baslatmada pip kurulumu biraz surer. Loglarda su satir gorunmelidir:
 
@@ -96,7 +115,7 @@ Invoke-RestMethod http://65.108.39.249:25364/health
 Beklenen cevap:
 
 ```json
-{"ok":true,"version":"0.2.4","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"alert_filtered":0,"heartbeat_timeout_seconds":120,"injection_alerts":true,"injection_alert_kinds":["cheat_signature","external_agent","jvm_argument","mod_file"],"injection_min_confidence":"high"}
+{"ok":true,"version":"0.2.5","dry_run":false,"bot_ready":true,"active_sessions":0,"alert_queue":0,"alert_dropped":0,"alert_filtered":0,"heartbeat_timeout_seconds":120,"injection_alerts":true,"injection_alert_kinds":["cheat_signature","external_agent","jvm_argument","mod_file"],"injection_min_confidence":"high"}
 ```
 
 `alert_queue` Discord uyarilarinin bekleyen sayisidir; `alert_dropped`
@@ -126,7 +145,9 @@ Sunucuda:
 Uygulama tarafinda gercek anahtarlar `ac-app/config.local.properties` dosyasina
 yazilir; `scripts/build-exe.ps1` bunlari jar'a gomer. Bu dosya git'e eklenmez
 ve EXE icine kopyalanmaz; dagitilan `client.properties` yalnizca `api.baseUrl`
-ve zaman asimlarini tasir.
+ve zaman asimlarini tasir. Build #13 (0.2.5) EXE'sinde `api.baseUrl` zaten
+`http://65.108.39.249:25364` olarak gomuludur; VDS'te port degisirse EXE'yi
+yeniden derlemek gerekir.
 
 ```properties
 api.baseUrl=http://65.108.39.249:25364
@@ -149,6 +170,10 @@ $env:AC_API_SECRET = "..."
 botunu calistirir. Istemci GitHub Releases uzerinden yayinlanir:
 
 **https://github.com/ToxidoAAC/ToxidoAntiCheat/releases/tag/v1.0.9**
+
+> Guncel 0.2.5 build #13 (NoObfuscate) henuz release edilmedi: 26.3
+> istemcisinde `packet_handler` bulunamadigi icin TriggerBot 2/4'te kaliyor.
+> Bu hata cozulmeden EXE'yi yeni surum olarak yayinlamayin.
 
 Tek komut:
 
