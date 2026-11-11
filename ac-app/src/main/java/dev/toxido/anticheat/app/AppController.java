@@ -85,7 +85,11 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             "Minecraft bulundu",
             minecraft.username() + " • " + safe(minecraft.version())
         );
-        reporter.log("Minecraft PID " + minecraft.pid() + " (" + minecraft.username() + ")");
+        reporter.log(
+            "Minecraft PID " + minecraft.pid() + " (" + minecraft.username() + ")"
+                + " launcher=" + minecraft.launcher()
+                + " via=" + minecraft.detectedBy()
+        );
 
         try {
             connect(minecraft);
