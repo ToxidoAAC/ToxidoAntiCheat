@@ -52,6 +52,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
     private final AtomicLong agentAttachedAt = new AtomicLong(0);
     private volatile String stageRunId;
     private volatile JsonObject lastCapabilityView;
+    private volatile long lastCapabilityTs;
     private volatile MinecraftProcess game;
     private final AtomicBoolean reopening = new AtomicBoolean(false);
 
@@ -274,6 +275,14 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         if (!capability.has("client_ts")) {
             capability.addProperty("client_ts", System.currentTimeMillis());
         }
+        long clientTs = number(capability, "client_ts", 0L);
+        if (clientTs > 0L && clientTs < lastCapabilityTs) {
+            // Gecikmis capability daha yeni durumu ezmemeli.
+            return;
+        }
+        if (clientTs > 0L) {
+            lastCapabilityTs = clientTs;
+        }
         lastCapabilityView = capability;
         reporter.log("Ajan yetenekleri: " + capability);
         logStatus(capability);
@@ -292,12 +301,15 @@ public final class AppController implements Runnable, AgentBridge.Listener {
 
     private void flushCapabilityHistory() {
         synchronized (capabilityHistory) {
-            List<JsonObject> snapshot = new ArrayList<>(capabilityHistory);
+            // Yalnizca en yeni yetenek gonderilir; aksi halde birikmis eski
+            // varsayilan kayitlar guncel surum bilgisini panoda ezer.
+            JsonObject latest = capabilityHistory.isEmpty()
+                ? null
+                : capabilityHistory.get(capabilityHistory.size() - 1);
             capabilityHistory.clear();
-            for (JsonObject capability : snapshot) {
-                emitCapabilityStages(capability);
+            if (latest != null) {
+                emitCapabilityStages(latest);
             }
-            // Birikmis kayitlar gonderildikten sonra dogrudan akisa gec.
             sessionReady.set(true);
         }
     }
@@ -333,6 +345,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             + " (" + text(capability, "packet_reason") + ")"
             + " install=" + install
             + "/" + text(capability, "install_attempts")
+            + " calisiyor=" + text(capability, "install_running")
+            + " boots=" + text(capability, "boots")
+            + " ornek=" + text(capability, "instance")
             + " netty=" + text(capability, "netty_detail")
             + " | trigger=" + text(capability, "triggerbot")
             + " input=" + text(capability, "input")
@@ -341,6 +356,22 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         if (statusLogged.add(core)) {
             reporter.log(line);
         }
+    }
+
+    /**
+     * Panoda gorunen alanlarin parmak izi. Degerlerden biri degistiginde
+     * asama yeniden gonderilir; boylece pano bekleme sirasinda donmaz.
+     */
+    private static String visible(JsonObject capability) {
+        return text(capability, "version")
+            + "|" + text(capability, "profile")
+            + "|" + text(capability, "hook")
+            + "|" + text(capability, "install")
+            + "|" + text(capability, "input")
+            + "|" + text(capability, "triggerbot")
+            + "|" + text(capability, "packet_reason")
+            + "|" + text(capability, "instance")
+            + "|" + text(capability, "reason");
     }
 
     private void emitCapabilityStages(JsonObject capability) {
@@ -382,7 +413,7 @@ public final class AppController implements Runnable, AgentBridge.Listener {
                 || "off".equals(triggerbot)))) {
             emitStage("packet_waiting", 2, 4, "Packet hook kurulumu", "waiting",
                 timestamp, capability,
-                "packet_waiting:" + packetReason + ":" + reason);
+                "packet_waiting:" + visible(capability));
             return;
         }
 
@@ -466,6 +497,12 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "packet_hook");
             copyCapability(capability, payload, "packet_reason");
             copyCapability(capability, payload, "install");
+            copyCapability(capability, payload, "install_attempts");
+            copyCapability(capability, payload, "install_running");
+            copyCapability(capability, payload, "boots");
+            copyCapability(capability, payload, "instance");
+            copyCapability(capability, payload, "netty_detail");
+            copyCapability(capability, payload, "netty_age");
             copyCapability(capability, payload, "input");
             copyCapability(capability, payload, "input_reason");
             copyCapability(capability, payload, "reason");

@@ -41,6 +41,9 @@ final class NettyHook {
 
     private static volatile String lastState = "";
     private static volatile boolean handlerLoadFailed;
+    private static volatile String instanceReason = "not_started";
+    private static volatile Instrumentation instrumentationRef;
+    private static volatile long lastInstanceScanAt;
     private static volatile String versionHint = "unknown";
     private static volatile String gameDir = "";
     private static volatile String profileName = "";
@@ -71,6 +74,7 @@ final class NettyHook {
         versionHint = hint == null ? "unknown" : hint;
         gameDir = directory == null ? "" : directory;
         profileName = requestedProfile == null ? "" : requestedProfile;
+        instrumentationRef = instrumentation;
         Thread thread = new Thread(
             () -> loop(instrumentation, client),
             "40x1d0AC-netty-hook"
@@ -143,10 +147,12 @@ final class NettyHook {
 
                 Object minecraft = staticInstance(minecraftClass);
                 if (minecraft == null) {
+                    Phase2.instanceNote(instanceReason);
                     state(client, "waiting_for_minecraft_instance " + brief(minecraftClass));
                     sleep();
                     continue;
                 }
+                Phase2.instanceNote("ok:" + brief(minecraft.getClass()));
 
                 Object networkHandler = findNetworkHandler(minecraft);
                 if (networkHandler == null) {
@@ -460,6 +466,30 @@ final class NettyHook {
     }
 
     private static Object staticInstance(Class<?> type) {
+        String failure = "";
+
+        // 1) Statik alanlar once denenir. Minecraft kendi ornegini alanda
+        //    tutar; bu yol shock/sinif yukleyici farklarindan etkilenmez.
+        for (Field field : allFields(type)) {
+            if (!Modifier.isStatic(field.getModifiers())
+                || !type.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            try {
+                field.setAccessible(true);
+                Object value = field.get(null);
+                if (value != null) {
+                    instanceReason = "field:" + field.getName();
+                    return value;
+                }
+            } catch (Throwable throwable) {
+                if (failure.isEmpty()) {
+                    failure = "field " + field.getName() + " -> " + brief(throwable);
+                }
+            }
+        }
+
+        // 2) Bilinen erisimci adlari (mojang, intermediary, obfuscated).
         for (Method method : allMethods(type)) {
             if (!Modifier.isStatic(method.getModifiers())
                 || method.getParameterCount() != 0
@@ -475,13 +505,20 @@ final class NettyHook {
             }
             try {
                 method.setAccessible(true);
-                return method.invoke(null);
-            } catch (Throwable ignored) {
+                Object value = method.invoke(null);
+                if (value != null) {
+                    instanceReason = "method:" + method.getName();
+                    return value;
+                }
+            } catch (Throwable throwable) {
+                if (failure.isEmpty()) {
+                    failure = "method " + method.getName() + " -> " + brief(throwable);
+                }
             }
         }
 
-        // Vanilla obfuscated istemcide getInstance adi da obfuscated olur;
-        // Minecraft donduren static no-arg metodu sekle gore bul.
+        // 3) Vanilla obfuscated istemcide erisimci adi da obfuscated olur;
+        //    Minecraft donduren static no-arg metodu sekle gore dene.
         for (Method method : allMethods(type)) {
             if (!Modifier.isStatic(method.getModifiers())
                 || method.getParameterCount() != 0
@@ -492,24 +529,65 @@ final class NettyHook {
                 method.setAccessible(true);
                 Object value = method.invoke(null);
                 if (value != null) {
+                    instanceReason = "shape:" + method.getName();
                     return value;
                 }
-            } catch (Throwable ignored) {
+            } catch (Throwable throwable) {
+                if (failure.isEmpty()) {
+                    failure = "shape " + method.getName() + " -> " + brief(throwable);
+                }
             }
         }
-        for (Field field : type.getDeclaredFields()) {
-            if (!Modifier.isStatic(field.getModifiers())
-                || !type.isAssignableFrom(field.getType())) {
-                continue;
-            }
-            try {
-                field.setAccessible(true);
-                Object value = field.get(null);
-                if (value != null) {
-                    return value;
+
+        // 4) Son care: yuklu siniflarda Minecraft tipinde dolu statik alan ara.
+        Object scanned = staticFieldScan(type);
+        if (scanned != null) {
+            return scanned;
+        }
+
+        instanceReason = failure.isEmpty() ? "no_accessor" : failure;
+        return null;
+    }
+
+    /**
+     * Yuklu tum siniflarda {@code type} tipinde dolu statik alan tarar. Yalnizca
+     * dogrudan erisimciler basarisiz oldugunda ve 10 saniyede en fazla bir kez
+     * calisir; aksi halde binlerce sinifta reflection maliyeti olusur.
+     */
+    private static Object staticFieldScan(Class<?> type) {
+        Instrumentation instrumentation = instrumentationRef;
+        if (instrumentation == null) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastInstanceScanAt < 10_000L) {
+            return null;
+        }
+        lastInstanceScanAt = now;
+        try {
+            for (Class<?> candidate : instrumentation.getAllLoadedClasses()) {
+                if (candidate == null || candidate == type) {
+                    continue;
                 }
-            } catch (Throwable ignored) {
+                for (Field field : candidate.getDeclaredFields()) {
+                    if (!Modifier.isStatic(field.getModifiers())
+                        || !type.isAssignableFrom(field.getType())) {
+                        continue;
+                    }
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(null);
+                        if (value != null) {
+                            instanceReason =
+                                "scan:" + candidate.getName() + "#" + field.getName();
+                            return value;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
             }
+        } catch (Throwable throwable) {
+            AgentMain.debug("[NETTY] instance taramasi: " + throwable);
         }
         return null;
     }

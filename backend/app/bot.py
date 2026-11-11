@@ -48,41 +48,55 @@ class ACBot(commands.Bot):
         )
         @app_commands.guild_only()
         async def restart(interaction: discord.Interaction) -> None:
+            # Discord yanit penceresi 3 saniyedir; istek bazen bu sureyi asar
+            # ve "Unknown interaction" hatasi alinir. Erken defer bunu onler.
+            deferred = False
+            try:
+                await interaction.response.defer(ephemeral=True)
+                deferred = True
+            except Exception:
+                log.exception("/restart: erken yanit basarisiz")
+
+            if not deferred:
+                return
+
             if not self._is_staff(interaction):
-                await interaction.response.send_message(
-                    "Bu komutu kullanma yetkin yok.", ephemeral=True
-                )
+                await self._respond(interaction, "Bu komutu kullanma yetkin yok.")
                 return
 
             handler = self.restart_handler
             if handler is None:
-                await interaction.response.send_message(
-                    "Yeniden baslatma servisi hazir degil.", ephemeral=True
-                )
+                await self._respond(interaction, "Yeniden baslatma servisi hazir degil.")
                 return
 
             try:
                 count = await handler()
             except Exception:
                 log.exception("/restart istegi basarisiz")
-                await interaction.response.send_message(
-                    "Yeniden baslatma istegi gonderilemedi.", ephemeral=True
+                await self._respond(
+                    interaction, "Yeniden baslatma istegi gonderilemedi."
                 )
                 return
 
             if count:
-                await interaction.response.send_message(
+                await self._respond(
+                    interaction,
                     f"🔄 Yeniden baslatma istendi ({count} oturum). "
                     "Pano birkac saniye icinde sifirlanacak.",
-                    ephemeral=True,
                 )
             else:
-                await interaction.response.send_message(
+                await self._respond(
+                    interaction,
                     "Aktif oturum yok; once anti-cheat uygulamasini baslat.",
-                    ephemeral=True,
                 )
 
         return restart
+
+    async def _respond(self, interaction: discord.Interaction, message: str) -> None:
+        try:
+            await interaction.followup.send(message, ephemeral=True)
+        except Exception:
+            log.exception("/restart yaniti gonderilemedi")
 
     def _is_staff(self, interaction: discord.Interaction) -> bool:
         if self.settings.staff_user_id and interaction.user.id == self.settings.staff_user_id:

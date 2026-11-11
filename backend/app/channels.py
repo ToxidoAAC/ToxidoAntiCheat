@@ -397,6 +397,16 @@ class ChannelManager:
         lines = []
         statuses = []
         completed = 0
+        # Yeniden baslatmada onceki run'dan kalan capability zaman damgasi
+        # yeni panoya dusebiliyor; bu yuzden saatleri run baslangicina sabitle.
+        try:
+            run_floor = max(
+                int(str(item.get("run_id")))
+                for item in stages.values()
+                if str(item.get("run_id") or "").isdigit()
+            )
+        except ValueError:
+            run_floor = 0
         pending_titles = {
             1: "Ajan bekleniyor",
             2: "Packet hook kurulumu",
@@ -422,6 +432,8 @@ class ChannelManager:
                     if raw_statuses[candidate - 1] == "active":
                         stage_ts = stages.get(candidate, {}).get("client_ts")
                         break
+            if run_floor and isinstance(stage_ts, (int, float)) and stage_ts < run_floor:
+                stage_ts = run_floor
             seconds = _stage_seconds(stage_ts)
             marker = {
                 "active": "✅",
@@ -508,9 +520,21 @@ class ChannelManager:
         )
         install = latest.get("install")
         if install:
+            detail = [f"`{install}`"]
+            instance = latest.get("instance")
+            if instance:
+                detail.append(f"ornek: `{_clip(str(instance), 80)}`")
+            boots = latest.get("boots")
+            if boots:
+                detail.append(f"baglanti: `{boots}`")
+            running = latest.get("install_running")
+            if running is not None:
+                detail.append(
+                    "kurulum: " + ("calisiyor" if running else "durdu")
+                )
             embed.add_field(
                 name="🧰 Kurulum",
-                value=f"`{install}`",
+                value="\n".join(detail),
                 inline=True,
             )
         embed.add_field(

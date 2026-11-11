@@ -29,6 +29,7 @@ public final class Phase2 {
     private static volatile int installAttempts;
     private static volatile long nettyTickAt;
     private static volatile String nettyDetail = "not_started";
+    private static volatile String instanceNote = "not_started";
     private static volatile boolean inputWatchStarted;
     private static volatile int inputFailures;
     private static volatile Instrumentation agentInstrumentation;
@@ -89,9 +90,11 @@ public final class Phase2 {
         Instrumentation instrumentation = agentInstrumentation;
         AgentClient client = clientRef;
         if (instrumentation == null || client == null) {
+            AgentMain.log("Kurulum baslatilamadi: instrumentation veya istemci yok.");
             return;
         }
         if (!installRunning.compareAndSet(false, true)) {
+            AgentMain.log("Kurulum dongusu zaten calisiyor.");
             return;
         }
         Thread installer = new Thread(
@@ -102,6 +105,7 @@ public final class Phase2 {
         );
         installer.setDaemon(true);
         installer.start();
+        AgentMain.log("Kurulum dongusu basladi.");
     }
 
     /**
@@ -322,6 +326,19 @@ public final class Phase2 {
         }
     }
 
+    /**
+     * Minecraft ornegi bulunamadiginda nedeni panoya tasir. Boylece "ornek yok"
+     * durumu sessiz kalmaz; hangi erisimcinin hangi hatayi verdigi gorulur.
+     */
+    static void instanceNote(String note) {
+        String value = note == null || note.isEmpty() ? "unknown" : note;
+        if (value.equals(instanceNote)) {
+            return;
+        }
+        instanceNote = value;
+        emitCapability();
+    }
+
     static void nettyWaiting(String nettyReason) {
         if ("active".equals(packetStatus) || nettyReason == null) {
             return;
@@ -433,6 +450,9 @@ public final class Phase2 {
             + ",\"packet_reason\":" + Json.quote(packetReason)
             + ",\"install\":" + Json.quote(installReason)
             + ",\"install_attempts\":" + installAttempts
+            + ",\"install_running\":" + installRunning.get()
+            + ",\"boots\":" + AgentMain.boots()
+            + ",\"instance\":" + Json.quote(instanceNote)
             + ",\"netty_detail\":" + Json.quote(nettyDetail)
             + ",\"netty_age\":" + nettyAge
             + ",\"input\":" + Json.quote(inputStatus)

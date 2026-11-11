@@ -19,6 +19,8 @@ public final class AgentMain {
     public static final String VERSION = "0.2.5";
 
     private static final AtomicLong DEBUG_LINES = new AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicInteger BOOTS =
+        new java.util.concurrent.atomic.AtomicInteger();
     private static final Deque<String> PENDING_LOGS = new ArrayDeque<>();
     private static volatile JarFile bootstrapJar;
     private static volatile AgentClient remoteClient;
@@ -44,6 +46,11 @@ public final class AgentMain {
 
         log("Ajan yuklendi (" + mode + "), port=" + port + ", surum=" + VERSION);
 
+        int boots = BOOTS.incrementAndGet();
+        if (boots > 1) {
+            log("UYARI: ayni JVM'e " + boots + ". kez baglanildi.");
+        }
+
         if (instrumentation != null) {
             appendToBootstrap(instrumentation);
             log("Instrumentation hazir; yeniden tanimlama=" + instrumentation.isRedefineClassesSupported());
@@ -56,8 +63,21 @@ public final class AgentMain {
         thread.start();
 
         if (instrumentation != null) {
-            Phase2.start(instrumentation, client, version, gameDir, profile);
+            try {
+                Phase2.start(instrumentation, client, version, gameDir, profile);
+            } catch (Throwable throwable) {
+                // Ajan baslatma zinciri sessizce olmemeli: hata Discord
+                // kanalina loglanir, aksi halde pano sonsuza kadar bos kalir.
+                log("Faz 2 baslatilamadi: " + throwable);
+                java.io.StringWriter buffer = new java.io.StringWriter();
+                throwable.printStackTrace(new java.io.PrintWriter(buffer));
+                log(buffer.toString());
+            }
         }
+    }
+
+    static int boots() {
+        return BOOTS.get();
     }
 
     static void onConnected(AgentClient client) {
