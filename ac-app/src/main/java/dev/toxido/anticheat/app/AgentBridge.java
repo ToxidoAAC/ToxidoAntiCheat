@@ -32,6 +32,8 @@ public final class AgentBridge implements Closeable {
     private final String token = UUID.randomUUID().toString();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
+    /** Her basarili el sikismasinda artar; kopma bildiriminin eskimis olup olmadigini ayirir. */
+    private volatile long generation;
 
     private volatile Socket socket;
     private volatile BufferedWriter out;
@@ -60,20 +62,19 @@ public final class AgentBridge implements Closeable {
         while (!closed.get()) {
             try {
                 Socket candidate = server.accept();
-                if (handle(candidate)) {
-                    return;
-                }
+                handle(candidate);
             } catch (Exception exception) {
                 if (!closed.get()) {
-                    notifyDisconnected("agent_connection_error");
+                    // Tek bir kabul hatasi kopruyu kalici olarak kapatmasin.
+                    sleepQuietly(200L);
                 }
-                return;
             }
         }
     }
 
-    private boolean handle(Socket candidate) {
+    private void handle(Socket candidate) {
         Listener current = this.listener;
+        long sessionGeneration = -1L;
         try {
             candidate.setSoTimeout(30_000);
             BufferedReader in = new BufferedReader(
@@ -84,18 +85,20 @@ public final class AgentBridge implements Closeable {
             String helloLine = in.readLine();
             if (helloLine == null) {
                 closeQuietly(candidate);
-                return false;
+                return;
             }
 
             JsonObject hello = JsonParser.parseString(helloLine).getAsJsonObject();
             if (!"hello".equals(hello.get("type").getAsString())
                 || !token.equals(hello.get("token").getAsString())) {
                 closeQuietly(candidate);
-                return false;
+                return;
             }
 
             this.socket = candidate;
             this.out = writer;
+            sessionGeneration = ++generation;
+            this.disconnected.set(false);
             send("{\"type\":\"hello_ack\"}");
 
             if (current != null) {
@@ -104,31 +107,62 @@ public final class AgentBridge implements Closeable {
 
             String line;
             while ((line = in.readLine()) != null) {
-                JsonObject message = JsonParser.parseString(line).getAsJsonObject();
-                String type = message.get("type").getAsString();
-                if (current == null) {
-                    continue;
-                }
-                if ("heartbeat".equals(type)) {
-                    current.onHeartbeat();
-                } else if ("capability".equals(type)) {
-                    current.onCapability(payload(message));
-                } else if ("event".equals(type)) {
-                    String event = message.has("event")
-                        ? message.get("event").getAsString() : "unknown";
-                    String key = message.has("key")
-                        ? message.get("key").getAsString() : "";
-                    current.onEvent(event, key, payload(message));
+                try {
+                    JsonObject message = JsonParser.parseString(line).getAsJsonObject();
+                    String type = message.get("type").getAsString();
+                    if (current == null) {
+                        continue;
+                    }
+                    if ("heartbeat".equals(type)) {
+                        current.onHeartbeat();
+                    } else if ("capability".equals(type)) {
+                        current.onCapability(payload(message));
+                    } else if ("event".equals(type)) {
+                        String event = message.has("event")
+                            ? message.get("event").getAsString() : "unknown";
+                        String key = message.has("key")
+                            ? message.get("key").getAsString() : "";
+                        current.onEvent(event, key, payload(message));
+                    }
+                } catch (Throwable listenerError) {
+                    // Tek bir mesajin islenmesi kopruyu dusurmesin.
                 }
             }
 
-            notifyDisconnected("agent_disconnected");
-            return true;
+            release(candidate);
+            scheduleDisconnect("agent_disconnected", sessionGeneration);
         } catch (Exception exception) {
-            closeQuietly(candidate);
-            notifyDisconnected("agent_error");
-            return true;
+            release(candidate);
+            scheduleDisconnect("agent_error", sessionGeneration);
         }
+    }
+
+    private void release(Socket candidate) {
+        closeQuietly(candidate);
+        if (this.socket == candidate) {
+            this.socket = null;
+            this.out = null;
+        }
+    }
+
+    /**
+     * Kopmayi hemen bildirmez. Ajan kisa sure icinde yeniden baglanirsa
+     * oturum kapanmaz; grace suresi sonunda hala baglanti yoksa bildirir.
+     */
+    private void scheduleDisconnect(String reason, long expectedGeneration) {
+        Thread thread = new Thread(() -> {
+            sleepQuietly(8000L);
+            if (closed.get() || generation != expectedGeneration) {
+                return;
+            }
+            Socket active = this.socket;
+            if (active != null && active.isConnected() && !active.isClosed()) {
+                return;
+            }
+            notifyDisconnected(reason);
+        }, "toxido-ac-bridge-grace");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private static JsonObject payload(JsonObject message) {
@@ -170,6 +204,14 @@ public final class AgentBridge implements Closeable {
             // Zaten kapali olabilir.
         }
         notifyDisconnected("bridge_closed");
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void closeQuietly(Socket socket) {

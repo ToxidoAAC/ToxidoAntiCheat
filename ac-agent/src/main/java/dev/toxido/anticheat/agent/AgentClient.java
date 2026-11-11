@@ -24,6 +24,7 @@ public final class AgentClient implements Runnable {
     private final Deque<String> pending = new ArrayDeque<>();
 
     private volatile BufferedWriter out;
+    private volatile Socket activeSocket;
 
     public AgentClient(int port, String token) {
         this.port = port;
@@ -32,37 +33,64 @@ public final class AgentClient implements Runnable {
 
     @Override
     public void run() {
-        Socket connected = connect();
-        if (connected == null) {
-            AgentMain.log("Uygulamaya baglanilamadi (port=" + port + ")");
-            return;
-        }
-
-        try (Socket socket = connected;
-             BufferedReader in = new BufferedReader(
-                 new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
-
-            this.out = new BufferedWriter(
-                new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
-
-            sendHello();
-
-            String line;
-            while ((line = in.readLine()) != null) {
-                if (line.contains("\"type\":\"ping\"")) {
-                    send("{\"type\":\"pong\"}");
-                } else if (line.contains("\"type\":\"restart\"")) {
-                    Phase2.restartPipeline();
-                } else if (line.contains("\"type\":\"hello_ack\"")) {
-                    flushPending();
-                    startHeartbeat();
-                    AgentMain.onConnected(this);
+        // Uygulama yeniden baslarsa veya IPC koparsa ajan olmez; baglanti
+        // kurulana kadar tekrar dener. Boylece tek bir kopma butun tespit
+        // akisini kalici olarak kesmez.
+        while (running.get()) {
+            Socket connected = connect();
+            if (connected == null) {
+                if (!running.get()) {
+                    return;
                 }
+                AgentMain.log("Uygulamaya baglanilamadi; yeniden denenecek.");
+                sleep(2000);
+                continue;
             }
-        } catch (Exception exception) {
-            AgentMain.log("Baglanti kapandi: " + exception.getMessage());
-        } finally {
-            running.set(false);
+            activeSocket = connected;
+
+            try (Socket socket = connected;
+                 BufferedReader in = new BufferedReader(
+                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+
+                synchronized (this) {
+                    this.out = new BufferedWriter(
+                        new OutputStreamWriter(
+                            socket.getOutputStream(), StandardCharsets.UTF_8
+                        )
+                    );
+                }
+
+                sendHello();
+
+                String line;
+                while ((line = in.readLine()) != null) {
+                    if (line.contains("\"type\":\"ping\"")) {
+                        send("{\"type\":\"pong\"}");
+                    } else if (line.contains("\"type\":\"restart\"")) {
+                        Phase2.restartPipeline();
+                    } else if (line.contains("\"type\":\"hello_ack\"")) {
+                        flushPending();
+                        startHeartbeat();
+                        AgentMain.onConnected(this);
+                    }
+                }
+                if (running.get()) {
+                    AgentMain.log("Baglanti kapandi; yeniden baglanilacak.");
+                }
+            } catch (Exception exception) {
+                if (running.get()) {
+                    AgentMain.log("Baglanti kapandi: " + exception.getMessage());
+                }
+            } finally {
+                synchronized (this) {
+                    this.out = null;
+                }
+                activeSocket = null;
+            }
+
+            if (running.get()) {
+                sleep(1000);
+            }
         }
     }
 
@@ -146,14 +174,18 @@ public final class AgentClient implements Runnable {
 
     private void heartbeatLoop() {
         while (running.get()) {
-            send("{\"type\":\"heartbeat\",\"ts\":" + System.currentTimeMillis() + "}");
+            // Baglanti yokken kalp atisi biriktirme; yeniden baglaninca
+            // yalnizca gercek olaylar ve son capability gonderilsin.
+            if (out != null) {
+                send("{\"type\":\"heartbeat\",\"ts\":" + System.currentTimeMillis() + "}");
+            }
             sleep(5000);
         }
     }
 
     private synchronized void send(String json) {
         if (out == null) {
-            if (pending.size() < 200) {
+            if (!json.contains("\"type\":\"heartbeat\"") && pending.size() < 200) {
                 pending.addLast(json);
             }
             return;
@@ -173,7 +205,18 @@ public final class AgentClient implements Runnable {
             out.newLine();
             out.flush();
         } catch (Exception exception) {
-            running.set(false);
+            // Yazma hatasi tum ajani durdurmaz; baglanti dusurulur ve
+            // disaridaki dongu yeniden baglanir.
+            AgentMain.log("Yazma hatasi; baglanti yenilenecek.");
+            out = null;
+            Socket socket = activeSocket;
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (Exception ignored) {
+                    // kapanis hatasi onemsiz
+                }
+            }
         }
     }
 

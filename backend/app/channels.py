@@ -291,7 +291,18 @@ class ChannelManager:
         embed = self._stage_board_embed(session, board)
         message = board.get("message")
         if message is None:
-            board["message"] = await channel.send(embed=embed)
+            try:
+                board["message"] = await channel.send(embed=embed)
+            except discord.HTTPException as exc:
+                log.warning("Asama panosu gonderilemedi: %s", exc)
+                # Tek seferlik gecici hata olabilir; kisa bekleyip bir kez
+                # daha dene. Boylece baslatma panosu kaybolmaz.
+                await asyncio.sleep(1.0)
+                try:
+                    board["message"] = await channel.send(embed=embed)
+                except discord.HTTPException as retry_exc:
+                    log.warning("Asama panosu gonderilemedi (tekrar): %s", retry_exc)
+                    return
             board["last_edit"] = time.monotonic()
             if final:
                 board["final"] = True
@@ -306,16 +317,28 @@ class ChannelManager:
 
         try:
             await message.edit(embed=embed)
-            board["last_edit"] = now
+            board["last_edit"] = time.monotonic()
             if final:
                 board["final"] = True
         except discord.NotFound:
             board["message"] = await channel.send(embed=embed)
-            board["last_edit"] = now
+            board["last_edit"] = time.monotonic()
             if final:
                 board["final"] = True
         except discord.HTTPException as exc:
             log.warning("Asama mesaji duzenlenemedi: %s", exc)
+            if final:
+                # Son guncelleme kacarsa pano 3/4'te kalir; kisa bekleyip
+                # bir kez daha dene.
+                await asyncio.sleep(1.0)
+                try:
+                    await message.edit(embed=embed)
+                    board["last_edit"] = time.monotonic()
+                    board["final"] = True
+                except discord.HTTPException as retry_exc:
+                    log.warning(
+                        "Asama mesaji duzenlenemedi (tekrar): %s", retry_exc
+                    )
 
     async def _update_log_board(self, session: dict, payload: dict) -> None:
         line = str(payload.get("message") or "").strip()
@@ -611,6 +634,16 @@ class ChannelManager:
                 name="🎯 Hedef",
                 value=f"`{payload.get('target_name') or payload.get('target_type') or '?'}`",
                 inline=True,
+            )
+            species = (
+                payload.get("target_name")
+                or str(payload.get("target_type") or "")
+                .replace("$", "")
+                .rsplit(".", 1)[-1]
+                or "?"
+            )
+            embed.add_field(
+                name="🐾 Tür", value=f"`{species}`", inline=True
             )
             embed.add_field(name="⚡ Sonuç", value="`TriggerBot`", inline=True)
             embed.add_field(

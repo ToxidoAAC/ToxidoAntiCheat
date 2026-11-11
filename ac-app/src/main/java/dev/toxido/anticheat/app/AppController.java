@@ -353,6 +353,10 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             + " input=" + text(capability, "input")
             + " (" + text(capability, "input_reason") + ")";
         String line = nettyAge < 0L ? core : core + " [" + nettyAge + "s]";
+        line = line
+            + " emit=" + text(capability, "emit")
+            + " sinif=" + text(capability, "classes_total")
+            + " aday=" + text(capability, "mc_candidates");
         if (statusLogged.add(core)) {
             reporter.log(line);
         }
@@ -371,6 +375,8 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             + "|" + text(capability, "triggerbot")
             + "|" + text(capability, "packet_reason")
             + "|" + text(capability, "instance")
+            + "|" + text(capability, "netty_detail")
+            + "|" + text(capability, "install_attempts")
             + "|" + text(capability, "reason");
     }
 
@@ -394,16 +400,32 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         }
 
         if (packetFailed) {
+            // Once 4. asama, sonra 3. asama gonderilir; arada pano 3/4'te
+            // kalmasin. Backend alt asamayi otomatik aktife terfi ettirir.
             if (unsupportedVersion) {
-                emitStage("unsupported_version", 3, 4,
-                    "Desteklenmeyen surum", "failed", timestamp, capability);
                 emitStage("unsupported_trigger", 4, 4,
                     "TriggerBot devre disi", "failed", timestamp, capability);
+                emitStage("unsupported_version", 3, 4,
+                    "Desteklenmeyen surum", "failed", timestamp, capability);
             } else {
-                emitStage("packet_failed", 3, 4,
-                    "Packet hook kurulamadi", "failed", timestamp, capability);
                 emitStage("packet_failed_trigger", 4, 4,
                     "TriggerBot devre disi", "failed", timestamp, capability);
+                emitStage("packet_failed", 3, 4,
+                    "Packet hook kurulamadi", "failed", timestamp, capability);
+            }
+            return;
+        }
+
+        boolean triggerReady = "active".equals(triggerbot)
+            && "ready".equals(input) && packetActive;
+        if (triggerReady) {
+            // 4. asama once gonderilir; 3. asama ayni turda arkasindan
+            // gelir. Pano tek seferde 4/4'e cikar.
+            emitStage("triggerbot_ready", 4, 4, "TriggerBot hazir", "active",
+                timestamp, capability);
+            if (packetActive) {
+                emitStage("packet_installed", 3, 4, "Packet hook kuruldu", "active",
+                    timestamp, capability);
             }
             return;
         }
@@ -503,6 +525,9 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "instance");
             copyCapability(capability, payload, "netty_detail");
             copyCapability(capability, payload, "netty_age");
+            copyCapability(capability, payload, "emit");
+            copyCapability(capability, payload, "classes_total");
+            copyCapability(capability, payload, "mc_candidates");
             copyCapability(capability, payload, "input");
             copyCapability(capability, payload, "input_reason");
             copyCapability(capability, payload, "reason");

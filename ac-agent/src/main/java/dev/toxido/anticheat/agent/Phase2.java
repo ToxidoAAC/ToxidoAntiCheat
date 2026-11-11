@@ -29,6 +29,9 @@ public final class Phase2 {
     private static volatile int installAttempts;
     private static volatile long nettyTickAt;
     private static volatile String nettyDetail = "not_started";
+    /** nettyNote kaynakli capability yayinini 5 sn ile sinirlar. */
+    private static final java.util.concurrent.atomic.AtomicLong lastNoteEmit =
+        new java.util.concurrent.atomic.AtomicLong();
     private static volatile String instanceNote = "not_started";
     private static volatile boolean inputWatchStarted;
     private static volatile int inputFailures;
@@ -153,6 +156,9 @@ public final class Phase2 {
         }
     }
 
+    private static final java.util.concurrent.atomic.AtomicInteger emitCount =
+        new java.util.concurrent.atomic.AtomicInteger();
+
     private static void emitCapability() {
         AgentClient client = clientRef;
         if (client == null) {
@@ -160,6 +166,7 @@ public final class Phase2 {
         }
         String current = capability();
         lastCapability = current;
+        emitCount.incrementAndGet();
         client.sendCapability(current);
     }
 
@@ -177,10 +184,26 @@ public final class Phase2 {
         int attempts = 0;
         while (true) {
             try {
+                // Oyun daha menuye gelmediyse sinif listesini taramak
+                // Fabric'in classloader kilidiyle cakisabilir. Log'daki
+                // hazirlik izlerini bekleyip sonra cozumlemeye basla.
+                if (!GameReadiness.isReady(gameDir)) {
+                    attempts++;
+                    installAttempts = attempts;
+                    installReason = "waiting_for_game";
+                    reason = "waiting_for_attack_class";
+                    if (attempts == 1 || attempts % 20 == 0) {
+                        AgentMain.log(
+                            "Oyun hazir olmasi bekleniyor (deneme " + attempts + ")."
+                        );
+                    }
+                    sleep(attempts < 30 ? 1000L : 5000L);
+                    continue;
+                }
                 VersionResolver.Target resolved = target;
                 if (resolved == null) {
-                    resolved = VersionResolver.resolve(
-                        instrumentation, versionHint, gameDir, profileName, false
+                    resolved = resolveWithDeadline(
+                        instrumentation, versionHint, gameDir, profileName
                     );
                     if (resolved != null) {
                         target = resolved;
@@ -219,6 +242,46 @@ public final class Phase2 {
             }
             sleep(attempts < 30 ? 1000L : 5000L);
         }
+    }
+
+    private static final java.util.concurrent.atomic.AtomicInteger RESOLVE_IN_FLIGHT =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * resolve() oyun acilirken classloader kilidinde bekleyebiliyor. Bu
+     * yuzden ayri bir thread'de calistirilir ve 8 sn'de yanit gelmezse
+     * null donulur; kurulum dongusu beklemeye devam eder, ajan kilitlenmez.
+     */
+    private static VersionResolver.Target resolveWithDeadline(
+        Instrumentation instrumentation,
+        String versionHint,
+        String gameDir,
+        String profileName
+    ) throws InterruptedException {
+        if (RESOLVE_IN_FLIGHT.get() >= 2) {
+            return null;
+        }
+        Object[] result = new Object[1];
+        RESOLVE_IN_FLIGHT.incrementAndGet();
+        Thread worker = new Thread(() -> {
+            try {
+                result[0] = VersionResolver.resolve(
+                    instrumentation, versionHint, gameDir, profileName, false
+                );
+            } catch (Throwable throwable) {
+                AgentMain.log("Cozumleme hatasi: " + throwable);
+            } finally {
+                RESOLVE_IN_FLIGHT.decrementAndGet();
+            }
+        }, "40x1d0AC-resolve");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(8000L);
+        if (worker.isAlive()) {
+            installReason = "install_timeout";
+            return null;
+        }
+        return (VersionResolver.Target) result[0];
     }
 
     private static void startCollector(
@@ -323,6 +386,27 @@ public final class Phase2 {
         nettyTickAt = System.currentTimeMillis();
         if (detail != null && !detail.isEmpty()) {
             nettyDetail = detail;
+        }
+    }
+
+    /**
+     * Adim bilgisini yayinlar. nettyTickAt'e dokunmaz; boylece bir adimda
+     * kilitlenildiginde netty_age buyumeye devam eder ve kilit gorunur olur.
+     */
+    static void nettyNote(String detail) {
+        if (detail == null || detail.isEmpty()) {
+            return;
+        }
+        if (detail.equals(nettyDetail)) {
+            return;
+        }
+        nettyDetail = detail;
+        // Adim degisimini panoya tasi; refreshLoop bloke olsa bile kilit
+        // noktasi gorunur kalir. En fazla 5 sn'de bir yayinlanir.
+        long now = System.currentTimeMillis();
+        long previous = lastNoteEmit.get();
+        if (now - previous >= 5000L && lastNoteEmit.compareAndSet(previous, now)) {
+            emitCapability();
         }
     }
 
@@ -455,6 +539,9 @@ public final class Phase2 {
             + ",\"instance\":" + Json.quote(instanceNote)
             + ",\"netty_detail\":" + Json.quote(nettyDetail)
             + ",\"netty_age\":" + nettyAge
+            + ",\"emit\":" + emitCount.get()
+            + ",\"classes_total\":" + NettyHook.scanTotal()
+            + ",\"mc_candidates\":" + NettyHook.scanCandidates()
             + ",\"input\":" + Json.quote(inputStatus)
             + ",\"input_reason\":" + Json.quote(currentInputReason)
             + ",\"reason\":" + Json.quote(currentReason) + "}";

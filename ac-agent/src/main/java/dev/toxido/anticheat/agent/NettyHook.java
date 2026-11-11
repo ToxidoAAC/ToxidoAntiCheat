@@ -44,6 +44,10 @@ final class NettyHook {
     private static volatile String instanceReason = "not_started";
     private static volatile Instrumentation instrumentationRef;
     private static volatile long lastInstanceScanAt;
+    private static volatile Object minecraftInstance;
+    private static volatile Class<?> minecraftClass;
+    private static volatile String stepNote = "baslatiliyor";
+    private static volatile long stepSince = System.currentTimeMillis();
     private static volatile String versionHint = "unknown";
     private static volatile String gameDir = "";
     private static volatile String profileName = "";
@@ -61,6 +65,8 @@ final class NettyHook {
         profile = null;
         lastState = "";
         handlerLoadFailed = false;
+        stepNote = "restart";
+        stepSince = System.currentTimeMillis();
         Phase2.nettyHeartbeat("restart");
     }
 
@@ -81,130 +87,286 @@ final class NettyHook {
         );
         thread.setDaemon(true);
         thread.start();
+        startWatchdog();
     }
 
-    private static void loop(Instrumentation instrumentation, AgentClient client) {
-        AgentMain.log("Netty hook thread basladi");
-        Class<?> minecraftClass = null;
-        while (true) {
-            try {
-                Phase2.nettyHeartbeat(
-                    profile == null ? "loop:detecting" : "loop:" + profile.id
-                );
-                if (profile == null) {
-                    GameVersionDetector.Result early = GameVersionDetector.detect(
-                        null, gameDir, profileName
-                    );
-                    VersionProfile selected = VersionProfiles.select(
-                        early.version, early.loader, early.mapping
-                    );
-                    if (selected != null) {
-                        profile = selected;
-                        VersionProfiles.setActive(selected);
-                        Phase2.versionDetected(early, selected.id);
-                        AgentMain.log(
-                            "Surum profili secildi: " + selected.id
-                                + " (" + early.summary() + ")"
-                        );
-                    }
-                }
-
-                if (minecraftClass == null) {
-                    minecraftClass = findMinecraft(instrumentation, profile);
-                }
-                if (minecraftClass == null) {
-                    state(client, "waiting_for_minecraft_class");
-                    sleep();
-                    continue;
-                }
-
-                if (profile == null || !profileMatches(profile, minecraftClass)) {
-                    GameVersionDetector.Result detected = GameVersionDetector.detect(
-                        minecraftClass, gameDir, profileName
-                    );
-                    VersionProfile selected = VersionProfiles.select(
-                        detected.version, detected.loader, detected.mapping
-                    );
-                    if (selected == null) {
-                        state(client, "unsupported_version " + detected.summary());
-                        sleep();
+    /**
+     * Netty halkasi bir adimda kilitlenirse bunu gorunur kilar. Halkayi
+     * zorla kesmek yerine hangi adimda ve kac saniyedir takildigini raporlar.
+     */
+    private static void startWatchdog() {
+        Thread watchdog = new Thread(() -> {
+            long lastWarnAt = 0L;
+            while (true) {
+                try {
+                    Thread.sleep(3000L);
+                    long since = stepSince;
+                    if (since <= 0L) {
                         continue;
                     }
-                    if (profile != null && !profile.id.equals(selected.id)) {
-                        AgentMain.log(
-                            "Surum profili duzeltildi: " + profile.id
-                                + " -> " + selected.id + " (" + detected.summary() + ")"
-                        );
+                    long age = System.currentTimeMillis() - since;
+                    if (age < 8000L) {
+                        continue;
                     }
-                    profile = selected;
-                    VersionProfiles.setActive(selected);
-                    Phase2.versionDetected(detected, selected.id);
+                    long now = System.currentTimeMillis();
+                    if (now - lastWarnAt < 15000L) {
+                        continue;
+                    }
+                    lastWarnAt = now;
+                    long seconds = age / 1000L;
                     AgentMain.log(
-                        "Surum profili secildi: " + selected.id
-                            + " (" + detected.summary() + ")"
+                        "UYARI: Netty adimi " + seconds + " sn takildi: " + stepNote
+                    );
+                    Phase2.nettyNote("kilit:" + stepNote + "@" + seconds + "s");
+                } catch (InterruptedException interrupted) {
+                    return;
+                } catch (Throwable throwable) {
+                    AgentMain.log("Netty watchdog hatasi: " + throwable);
+                }
+            }
+        }, "40x1d0AC-netty-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    /**
+     * Su an calisan Netty adimini kaydeder; watchdog bunu izler. Bilerek
+     * capability'ye yazilmaz: her turda degisen adim adi panoyu ve gunlugu
+     * doldururdu. Yalnizca gercek kilitlenme nettyNote ile raporlanir.
+     */
+    private static void step(String name) {
+        stepNote = name;
+        stepSince = System.currentTimeMillis();
+    }
+
+    private static final long TICK_TIMEOUT_MS = 10000L;
+    private static final java.util.concurrent.atomic.AtomicInteger stallCount =
+        new java.util.concurrent.atomic.AtomicInteger();
+    /** Ayni anda en fazla kac tur thread'i yasayabilir (kilitlenme koruması). */
+    private static final java.util.concurrent.atomic.AtomicInteger liveTicks =
+        new java.util.concurrent.atomic.AtomicInteger();
+    private static final int MAX_LIVE_TICKS = 4;
+    /** Takilan turlar birikse bile bu sinirdan sonra yeni tur acilmaz. */
+    private static final int HARD_MAX_LIVE_TICKS = 12;
+    /** Bu sure gectiyse, takili turlar olsa da yeni bir deneme acilir. */
+    private static final long PROBE_INTERVAL_MS = 20000L;
+    private static volatile long lastTickStart;
+    /** Teshis: son sinif taramasinda toplam yuklu sinif ve bulunan aday sayisi. */
+    private static volatile int scanTotal;
+    private static volatile int scanCandidates;
+
+    static int scanTotal() {
+        return scanTotal;
+    }
+
+    static int scanCandidates() {
+        return scanCandidates;
+    }
+
+    /**
+     * Netty halkasi. Her tur ayri bir thread'de ve sure siniriyla calisir;
+     * boylece oyun acilirken classloader kilidine takilan tek bir cagri
+     * ajanin geri kalanini (pano, kurulum, heartbeat) dondurmez. Tur
+     * zaman asimina ugrarsa yeniden denenir; ust uste uc kez takilirsa
+     * profil ve ornek onbellegi sifirlanip bastan aranir.
+     */
+    private static void loop(Instrumentation instrumentation, AgentClient client) {
+        AgentMain.log("Netty hook thread basladi");
+        while (true) {
+            if (liveTicks.get() >= MAX_LIVE_TICKS) {
+                boolean probe = System.currentTimeMillis() - lastTickStart
+                    >= PROBE_INTERVAL_MS;
+                if (!probe || liveTicks.get() >= HARD_MAX_LIVE_TICKS) {
+                    Phase2.nettyNote(
+                        "kilit:" + stepNote + "@" + liveTicks.get() + "thread"
+                    );
+                    sleep();
+                    continue;
+                }
+                AgentMain.log(
+                    "Netty taramasi yeniden deneniyor ("
+                        + liveTicks.get() + " takili tur)"
+                );
+            }
+            lastTickStart = System.currentTimeMillis();
+            Thread tick = new Thread(
+                () -> {
+                    liveTicks.incrementAndGet();
+                    try {
+                        tick(instrumentation, client);
+                    } finally {
+                        liveTicks.decrementAndGet();
+                    }
+                },
+                "40x1d0AC-netty-tick"
+            );
+            tick.setDaemon(true);
+            tick.start();
+            try {
+                tick.join(TICK_TIMEOUT_MS);
+            } catch (InterruptedException interrupted) {
+                return;
+            }
+            if (tick.isAlive()) {
+                int stalls = stallCount.incrementAndGet();
+                Phase2.nettyNote("kilit:" + stepNote + "@" + stalls + "x");
+                if (stalls == 1 || stalls % 5 == 0) {
+                    AgentMain.log(
+                        "UYARI: Netty adimi " + (TICK_TIMEOUT_MS / 1000L)
+                            + " sn icinde bitmedi, yeniden denenecek: " + stepNote
                     );
                 }
-
-                Object minecraft = staticInstance(minecraftClass);
-                if (minecraft == null) {
-                    Phase2.instanceNote(instanceReason);
-                    state(client, "waiting_for_minecraft_instance " + brief(minecraftClass));
-                    sleep();
-                    continue;
+                if (stalls >= 3) {
+                    stallCount.set(0);
+                    minecraftInstance = null;
+                    minecraftClass = null;
+                    profile = null;
+                    GameVersionDetector.clearCache();
+                    Phase2.nettyNote("sifirla:" + stepNote);
                 }
-                Phase2.instanceNote("ok:" + brief(minecraft.getClass()));
-
-                Object networkHandler = findNetworkHandler(minecraft);
-                if (networkHandler == null) {
-                    state(client, "waiting_for_network_handler " + brief(minecraft.getClass()));
-                    sleep();
-                    continue;
-                }
-
-                Object connection = findConnection(networkHandler);
-                if (connection == null) {
-                    state(client, "waiting_for_connection " + brief(networkHandler.getClass()));
-                    sleep();
-                    continue;
-                }
-
-                Object channel = findChannel(connection);
-                if (channel == null || !isOpen(channel)) {
-                    state(
-                        client,
-                        "waiting_for_channel " + channelDiagnostic(connection)
-                    );
-                    sleep();
-                    continue;
-                }
-
-                Object pipeline = invokeNoArg(channel, "pipeline");
-                if (pipeline == null) {
-                    state(client, "waiting_for_pipeline " + brief(channel.getClass()));
-                    sleep();
-                    continue;
-                }
-
-                Object packetHandler = pipelineGet(pipeline, "packet_handler");
-                if (packetHandler == null) {
-                    state(client, "waiting_for_packet_handler " + brief(pipeline.getClass()));
-                    sleep();
-                    continue;
-                }
-
-                if (ensureHandler(pipeline, client)) {
-                    lastState = "active";
-                    Phase2.nettyActive(
-                        "netty:packet_handler",
-                        "netty_packet_handler"
-                    );
-                }
-            } catch (Throwable throwable) {
-                state(client, "netty_error " + brief(throwable.getClass()) + ": "
-                    + trim(throwable.getMessage(), 90));
-                AgentMain.debug("[NETTY] error: " + throwable);
+            } else {
+                stallCount.set(0);
             }
             sleep();
+        }
+    }
+
+    private static void tick(Instrumentation instrumentation, AgentClient client) {
+        try {
+            step("dongu");
+            Phase2.nettyHeartbeat(
+                profile == null ? "loop:detecting" : "loop:" + profile.id
+            );
+            if (profile == null) {
+                step("surum-tespiti");
+                GameVersionDetector.Result early = GameVersionDetector.detect(
+                    null, gameDir, profileName
+                );
+                VersionProfile selected = VersionProfiles.select(
+                    early.version, early.loader, early.mapping
+                );
+                if (selected != null) {
+                    profile = selected;
+                    VersionProfiles.setActive(selected);
+                    Phase2.versionDetected(early, selected.id);
+                    AgentMain.log(
+                        "Surum profili secildi: " + selected.id
+                            + " (" + early.summary() + ")"
+                    );
+                }
+            }
+
+            if (minecraftInstance == null) {
+                step("sinif-arama");
+                java.util.List<Class<?>> candidates =
+                    findMinecraftClasses(instrumentation, profile);
+                if (candidates.isEmpty()) {
+                    state(client, "waiting_for_minecraft_class");
+                    return;
+                }
+                minecraftClass = candidates.get(0);
+                Object found = null;
+                for (Class<?> candidate : candidates) {
+                    step("ornek:" + brief(candidate));
+                    found = staticInstance(candidate);
+                    if (found != null) {
+                        minecraftClass = candidate;
+                        break;
+                    }
+                }
+                if (found == null) {
+                    Phase2.instanceNote(instanceReason);
+                    state(
+                        client,
+                        "waiting_for_minecraft_instance " + brief(minecraftClass)
+                    );
+                    return;
+                }
+                minecraftInstance = found;
+                Phase2.instanceNote("ok:" + brief(found.getClass()));
+                AgentMain.log("Minecraft ornegi bulundu: " + instanceReason);
+            }
+
+            if (profile == null || !profileMatches(profile, minecraftClass)) {
+                step("profil-duzeltme");
+                GameVersionDetector.Result detected = GameVersionDetector.detect(
+                    minecraftClass, gameDir, profileName
+                );
+                VersionProfile selected = VersionProfiles.select(
+                    detected.version, detected.loader, detected.mapping
+                );
+                if (selected == null) {
+                    state(client, "unsupported_version " + detected.summary());
+                    return;
+                }
+                if (profile != null && !profile.id.equals(selected.id)) {
+                    AgentMain.log(
+                        "Surum profili duzeltildi: " + profile.id
+                            + " -> " + selected.id + " (" + detected.summary() + ")"
+                    );
+                }
+                profile = selected;
+                VersionProfiles.setActive(selected);
+                Phase2.versionDetected(detected, selected.id);
+                AgentMain.log(
+                    "Surum profili secildi: " + selected.id
+                        + " (" + detected.summary() + ")"
+                );
+            }
+
+            Object minecraft = minecraftInstance;
+
+            step("network-handler");
+            Object networkHandler = findNetworkHandler(minecraft);
+            if (networkHandler == null) {
+                state(client, "waiting_for_network_handler " + brief(minecraft.getClass()));
+                return;
+            }
+
+            step("connection");
+            Object connection = findConnection(networkHandler);
+            if (connection == null) {
+                state(client, "waiting_for_connection " + brief(networkHandler.getClass()));
+                return;
+            }
+
+            step("channel");
+            Object channel = findChannel(connection);
+            if (channel == null || !isOpen(channel)) {
+                state(
+                    client,
+                    "waiting_for_channel " + channelDiagnostic(connection)
+                );
+                return;
+            }
+
+            step("pipeline");
+            Object pipeline = invokeNoArg(channel, "pipeline");
+            if (pipeline == null) {
+                state(client, "waiting_for_pipeline " + brief(channel.getClass()));
+                return;
+            }
+
+            Object packetHandler = pipelineGet(pipeline, "packet_handler");
+            if (packetHandler == null) {
+                state(client, "waiting_for_packet_handler " + brief(pipeline.getClass()));
+                return;
+            }
+
+            step("packet-handler");
+            if (ensureHandler(pipeline, client)) {
+                lastState = "active";
+                stepSince = 0L;
+                Phase2.nettyNote("hazir:netty");
+                Phase2.nettyActive(
+                    "netty:packet_handler",
+                    "netty_packet_handler"
+                );
+            }
+        } catch (Throwable throwable) {
+            state(client, "netty_error " + brief(throwable.getClass()) + ": "
+                + trim(throwable.getMessage(), 90));
+            AgentMain.debug("[NETTY] error: " + throwable);
         }
     }
 
@@ -437,32 +599,49 @@ final class NettyHook {
         return builder.toString();
     }
 
-    private static Class<?> findMinecraft(
+    /**
+     * Ayni ada sahip birden fazla Minecraft sinifi olabilir (Knot ve oyun
+     * sinif yukleyicileri). Hepsini sirayla deneriz; ornegi olan kazanir.
+     *
+     * <p>Burada Class.forName/loadClass ASLA kullanilmaz: oyun acilirken
+     * Fabric'in classloader kilidiyle karsilikli kilitlenme (deadlock)
+     * olusuyor. Yalnizca oyun hazir olduktan sonra, JVMTI'nin yuklu sinif
+     * listesi okunur.</p>
+     */
+    private static java.util.List<Class<?>> findMinecraftClasses(
         Instrumentation instrumentation,
         VersionProfile active
     ) {
+        if (!GameReadiness.isReady(gameDir)) {
+            return new java.util.ArrayList<>();
+        }
         Class<?>[] loaded = instrumentation.getAllLoadedClasses();
+        scanTotal = loaded.length;
+        java.util.LinkedHashSet<Class<?>> found = new java.util.LinkedHashSet<>();
         if (active != null && active.minecraftClass != null) {
             for (Class<?> candidate : loaded) {
                 if (classMatches(candidate, active.minecraftClass)) {
-                    return candidate;
+                    found.add(candidate);
                 }
             }
         }
         for (String name : MINECRAFT_NAMES) {
             for (Class<?> candidate : loaded) {
                 if (name.equals(candidate.getName())) {
-                    return candidate;
+                    found.add(candidate);
                 }
             }
         }
-        for (Class<?> candidate : loaded) {
-            String simple = candidate.getSimpleName();
-            if ("Minecraft".equals(simple) || "MinecraftClient".equals(simple)) {
-                return candidate;
+        if (found.isEmpty()) {
+            for (Class<?> candidate : loaded) {
+                String simple = candidate.getSimpleName();
+                if ("Minecraft".equals(simple) || "MinecraftClient".equals(simple)) {
+                    found.add(candidate);
+                }
             }
         }
-        return null;
+        scanCandidates = found.size();
+        return new java.util.ArrayList<>(found);
     }
 
     private static Object staticInstance(Class<?> type) {
@@ -539,56 +718,10 @@ final class NettyHook {
             }
         }
 
-        // 4) Son care: yuklu siniflarda Minecraft tipinde dolu statik alan ara.
-        Object scanned = staticFieldScan(type);
-        if (scanned != null) {
-            return scanned;
-        }
-
+        // 4) Tum yuklu siniflarda tarama KALDIRILDI: sinif baslatma kilitlerine
+        //    girip Netty halkasini sessizce donduruyordu. Onun yerine ayni ada
+        //    sahip sinif adaylari tek tek denenir (findMinecraftClasses).
         instanceReason = failure.isEmpty() ? "no_accessor" : failure;
-        return null;
-    }
-
-    /**
-     * Yuklu tum siniflarda {@code type} tipinde dolu statik alan tarar. Yalnizca
-     * dogrudan erisimciler basarisiz oldugunda ve 10 saniyede en fazla bir kez
-     * calisir; aksi halde binlerce sinifta reflection maliyeti olusur.
-     */
-    private static Object staticFieldScan(Class<?> type) {
-        Instrumentation instrumentation = instrumentationRef;
-        if (instrumentation == null) {
-            return null;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastInstanceScanAt < 10_000L) {
-            return null;
-        }
-        lastInstanceScanAt = now;
-        try {
-            for (Class<?> candidate : instrumentation.getAllLoadedClasses()) {
-                if (candidate == null || candidate == type) {
-                    continue;
-                }
-                for (Field field : candidate.getDeclaredFields()) {
-                    if (!Modifier.isStatic(field.getModifiers())
-                        || !type.isAssignableFrom(field.getType())) {
-                        continue;
-                    }
-                    try {
-                        field.setAccessible(true);
-                        Object value = field.get(null);
-                        if (value != null) {
-                            instanceReason =
-                                "scan:" + candidate.getName() + "#" + field.getName();
-                            return value;
-                        }
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }
-        } catch (Throwable throwable) {
-            AgentMain.debug("[NETTY] instance taramasi: " + throwable);
-        }
         return null;
     }
 

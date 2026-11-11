@@ -68,9 +68,12 @@ public final class GameVersionDetector {
     );
 
     private static volatile Result cached;
+    private static volatile Result earlyResult;
+    private static volatile long earlyAt;
 
     static void clearCache() {
         cached = null;
+        earlyResult = null;
     }
 
     private GameVersionDetector() {
@@ -90,12 +93,30 @@ public final class GameVersionDetector {
             return previous;
         }
 
-        ClassLoader loader = loaderOf(minecraftClass);
-        String loaderName = detectLoader(loader);
-        String mapping = detectMapping(loader, minecraftClass);
+        // Erken asamada (Minecraft sinifi henuz yuklenmemisken) oyun
+        // classloader'ina HIC dokunulmaz. Class.forName, oyun acilirken
+        // classloader kilidinde bekleyip ajanin butun islerini (pano,
+        // kurulum, heartbeat) dondurebiliyordu. Bu yuzden loader dosyadan
+        // okunur, mapping yalnizca surumden turetilir.
+        boolean early = minecraftClass == null;
+        if (early) {
+            Result snapshot = earlyResult;
+            if (snapshot != null
+                && System.currentTimeMillis() - earlyAt < 10000L) {
+                return snapshot;
+            }
+        }
 
-        Result result = fromVersionJson(loader, minecraftClass, loaderName, mapping);
-        if (result == null) {
+        ClassLoader loader = loaderOf(minecraftClass);
+        String loaderName = early
+            ? loaderFromProfile(gameDir, profileName)
+            : detectLoader(loader);
+        String mapping = early ? "unknown" : detectMapping(loader, minecraftClass);
+
+        Result result = early
+            ? null
+            : fromVersionJson(loader, minecraftClass, loaderName, mapping);
+        if (result == null && !early) {
             result = fromFabric(loader, loaderName, mapping);
         }
         if (result == null) {
@@ -107,6 +128,14 @@ public final class GameVersionDetector {
         if (result == null) {
             result = new Result("unknown", "not_found", loaderName, mapping);
         }
+        if ("unknown".equals(result.mapping)) {
+            String derived = mappingFrom(loaderName, result.version);
+            if (!"unknown".equals(derived)) {
+                result = new Result(
+                    result.version, result.source, result.loader, derived
+                );
+            }
+        }
 
         if (result.known() && minecraftClass != null) {
             // Sinif elde yokken loader/mapping guvenilir olmayabilir; boyle
@@ -114,6 +143,13 @@ public final class GameVersionDetector {
             // sanilip desteklenmeyen surum olarak isaretlenebilir.
             cached = result;
             AgentMain.log("Surum tespiti: " + result.summary());
+        } else if (early && result.known()) {
+            Result before = earlyResult;
+            earlyResult = result;
+            earlyAt = System.currentTimeMillis();
+            if (before == null || !before.summary().equals(result.summary())) {
+                AgentMain.log("Surum tespiti (dosya): " + result.summary());
+            }
         }
         return result;
     }
@@ -313,6 +349,98 @@ public final class GameVersionDetector {
         } catch (Throwable throwable) {
             return null;
         }
+    }
+
+    /**
+     * Loader'i yalnizca dosyadan cikarir; oyun classloader'ina dokunmaz.
+     * Fabric/Quilt/Forge izleri launcher profil JSON'unun libraries
+     * bolumunde ve inheritsFrom alaninda bulunur.
+     */
+    private static String loaderFromProfile(String gameDir, String profileName) {
+        String text = profileText(gameDir, profileName);
+        if (text == null) {
+            return "unknown";
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        String inherited = first(JSON_INHERITS, text);
+        String inheritedLower = inherited == null
+            ? ""
+            : inherited.toLowerCase(Locale.ROOT);
+        if (lower.contains("net.fabricmc:fabric-loader")
+            || lower.contains("fabric-loader-")
+            || inheritedLower.startsWith("fabric-loader")) {
+            return "fabric";
+        }
+        if (lower.contains("net.quiltmc")
+            || inheritedLower.startsWith("quilt-loader")) {
+            return "quilt";
+        }
+        if (lower.contains("net.neoforged")) {
+            return "neoforge";
+        }
+        if (lower.contains("net.minecraftforge")) {
+            return "forge";
+        }
+        return "unknown";
+    }
+
+    private static String profileText(String gameDir, String profileName) {
+        if (profileName == null || profileName.isBlank()) {
+            return null;
+        }
+        java.util.List<Path> candidates = new java.util.ArrayList<>();
+        if (gameDir != null && !gameDir.isBlank()) {
+            Path base = Path.of(gameDir);
+            candidates.add(
+                base.resolve("versions")
+                    .resolve(profileName)
+                    .resolve(profileName + ".json")
+            );
+            // TLauncher bazi profillerde gameDir'i dogrudan
+            // versions\<profil> yapar; profil JSON'u bir ust dizin yerine
+            // o klasorun icinde durur.
+            candidates.add(base.resolve(profileName + ".json"));
+        }
+        String appData = System.getenv("APPDATA");
+        if (appData != null && !appData.isBlank()) {
+            candidates.add(
+                Path.of(appData)
+                    .resolve(".minecraft")
+                    .resolve("versions")
+                    .resolve(profileName)
+                    .resolve(profileName + ".json")
+            );
+        }
+        for (Path json : candidates) {
+            try {
+                if (Files.isRegularFile(json)) {
+                    return Files.readString(json, StandardCharsets.UTF_8);
+                }
+            } catch (Throwable throwable) {
+                AgentMain.debug("[VERSION] Profil dosyasi okunamadi: " + throwable);
+            }
+        }
+        return null;
+    }
+
+    /** Surum + loader'dan mapping ailesini cikarir (sinif yuklemeden). */
+    private static String mappingFrom(String loaderName, String version) {
+        String value = version == null
+            ? ""
+            : version.trim().toLowerCase(Locale.ROOT);
+        if (value.isEmpty() || "unknown".equals(value)) {
+            return "unknown";
+        }
+        if (value.startsWith("26.")) {
+            return "mojang";
+        }
+        String loader = loaderName == null
+            ? ""
+            : loaderName.toLowerCase(Locale.ROOT);
+        if (loader.contains("fabric") || loader.contains("quilt")) {
+            return "intermediary";
+        }
+        return "unknown";
     }
 
     private static String detectLoader(ClassLoader loader) {
