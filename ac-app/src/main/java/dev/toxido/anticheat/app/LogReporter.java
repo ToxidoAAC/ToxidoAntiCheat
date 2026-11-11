@@ -80,6 +80,9 @@ public final class LogReporter implements Reporter {
     public synchronized void log(String message) {
         String line = "[" + LocalTime.now().format(TIME_FORMAT) + "] "
             + message;
+        if (Boolean.getBoolean("ac.debug")) {
+            System.err.println(line);
+        }
         if (!queue.offer(line)) {
             queue.poll();
             queue.offer(line);

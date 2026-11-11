@@ -56,8 +56,18 @@ final class PacketAttack {
 
         // 26.x istemcilerinde saldiri, ServerboundInteractPacket'ten ayrilip
         // kendi ServerboundAttackPacket sinifina tasindi.
-        boolean attack = attackPacket || isAttack(packet, type)
-            || isProfileAttack(packet, type, profile, profilePacket);
+        boolean declaredAttack = profile != null
+            && "attack".equalsIgnoreCase(profile.packetKind);
+        boolean declaredInteract = profile != null
+            && "interact".equalsIgnoreCase(profile.packetKind);
+        boolean attack = attackPacket
+            || (declaredAttack && (profilePacket || attackPacket))
+            || (!declaredAttack && (isAttack(packet, type)
+                || isProfileAttack(packet, type, profile, profilePacket)));
+        if (declaredInteract && !attackPacket) {
+            attack = isAttack(packet, type)
+                || isProfileAttack(packet, type, profile, profilePacket);
+        }
         int entityId = entityId(packet, type);
         Object target = entityId < 0 ? null : findTarget(type.getClassLoader(), entityId);
         return new Result(attack, entityId, target, name);
@@ -166,6 +176,23 @@ final class PacketAttack {
 
     private static int entityId(Object packet, Class<?> type) {
         VersionProfile profile = VersionProfiles.active();
+        if (profile != null
+            && profile.entityIdAccessor != null
+            && !profile.entityIdAccessor.isEmpty()) {
+            for (Method method : type.getDeclaredMethods()) {
+                if (method.getParameterCount() != 0
+                    || Modifier.isStatic(method.getModifiers())
+                    || method.getReturnType() != int.class
+                    || !method.getName().equalsIgnoreCase(profile.entityIdAccessor)) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    return (Integer) method.invoke(packet);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
         // 26.x ServerboundAttackPacket bir record'dur ve entityId() metodu
         // ile hedef entity kimligini acik eder.
         for (Method method : type.getDeclaredMethods()) {

@@ -395,6 +395,7 @@ public final class AttackCorrelator {
             rawClick,
             state.targetType,
             state.targetName,
+            state.targetKind,
             state.targetUuid,
             evidence
         );

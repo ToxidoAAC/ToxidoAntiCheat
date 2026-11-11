@@ -8,8 +8,8 @@ import java.lang.reflect.Modifier;
 import java.util.Locale;
 
 /**
- * Minecraft surumune ve loader'a gore attack metodunu cozer.
- * Bilinen isim -> imza taramasi -> kapali mod (yanlis rapor yok).
+ * Calisan surum/loader icin katalogdan gelen attack zincirini cozer.
+ * Katalog satiri yoksa tahminle yanlis profile gecmez; nedeni panoya yazar.
  */
 public final class VersionResolver {
     public static final class Target {
@@ -52,45 +52,6 @@ public final class VersionResolver {
         }
     }
 
-    public static final class PacketTarget {
-        public final Class<?> owner;
-        public final String ownerName;
-        public final String methodName;
-        public final String methodDesc;
-        public final boolean instance;
-
-        PacketTarget(
-            Class<?> owner,
-            String methodName,
-            String methodDesc,
-            boolean instance
-        ) {
-            this.owner = owner;
-            this.ownerName = owner.getName();
-            this.methodName = methodName;
-            this.methodDesc = methodDesc;
-            this.instance = instance;
-        }
-
-        public String hook() {
-            return ownerName + "#" + methodName;
-        }
-    }
-
-    private static final String[] CONNECTION_NAMES = {
-        "net.minecraft.class_2535",
-        "net.minecraft.network.Connection",
-        "net.minecraft.network.ClientConnection",
-        "net.minecraft.client.multiplayer.ClientConnection"
-    };
-
-    private static final String[] OWNER_NAMES = {
-        "net.minecraft.class_636",
-        "net.minecraft.client.multiplayer.MultiPlayerGameMode",
-        "net.minecraft.client.network.ClientPlayerInteractionManager",
-        "net.minecraft.client.multiplayer.PlayerControllerMP"
-    };
-
     private static final String[] MINECRAFT_NAMES = {
         "net.minecraft.client.Minecraft",
         "net.minecraft.class_310",
@@ -122,75 +83,94 @@ public final class VersionResolver {
         if (instrumentation == null) {
             return null;
         }
-
         Class<?>[] loaded = instrumentation.getAllLoadedClasses();
 
-        // Vanilla istemcilerde sinif adlari obfuscated oldugu icin once
-        // surum/profil belirlenir; owner ve Minecraft sinifi profilden bulunur.
+        // Erken tespit yalnizca dosyadan surum/loader verir. Vanilla
+        // obfuscated istemcide Minecraft sinifi ancak bu surumun katalog
+        // satirindaki adla bulunabilir; bu yuzden adaylar sirayla denenir.
         GameVersionDetector.Result early = GameVersionDetector.detect(
             null, gameDir, profileName
         );
-        String earlyVersion = early.known() ? early.version : versionHint;
-        String earlyLoader = early.known() ? early.loader : detectLoader(loaded);
-        VersionProfile earlyProfile = VersionProfiles.select(
-            earlyVersion, earlyLoader, early.mapping
-        );
-
-        Class<?> owner = findOwner(loaded, earlyProfile);
-        if (owner == null) {
-            owner = findOwner(loaded);
-        }
-        if (owner == null) {
+        String hintVersion = early.known() ? early.version : versionHint;
+        Class<?> minecraft = findMinecraft(loaded, hintVersion);
+        if (minecraft == null) {
             if (logFailure) {
-                AgentMain.log("Etkilesim sinifi bulunamadi; triggerbot kapali.");
+                AgentMain.log(
+                    "Minecraft sinifi henuz yuklu degil; katalog cozumlemesi bekliyor."
+                );
             }
             return null;
         }
 
-        Method attack = findAttack(owner, earlyProfile);
-        if (attack == null) {
-            attack = findAttack(owner);
-        }
-        if (attack == null) {
-            if (logFailure) {
-                AgentMain.log("Attack metodu bulunamadi: " + owner.getName());
-            }
-            return null;
-        }
-
-        Class<?> minecraft = findMinecraft(loaded, earlyProfile);
         GameVersionDetector.Result detected = GameVersionDetector.detect(
             minecraft, gameDir, profileName
         );
         String loader = detected.known() ? detected.loader : detectLoader(loaded);
-        String version = detected.known() ? detected.version : versionHint;
-        if (version == null || version.isBlank()
-            || "unknown".equalsIgnoreCase(version)
-            || !GameVersionDetector.looksLikeVersion(version)) {
+        String version = detected.known() ? detected.version : hintVersion;
+        if (!GameVersionDetector.looksLikeVersion(version)) {
             version = detectVersion(minecraft);
         }
-        String family = family(version, owner.getName());
-        VersionProfile profile = VersionProfiles.select(
+
+        VersionCatalog.Resolved resolved = VersionProfiles.resolve(
             version, loader, detected.mapping
         );
-        if (profile == null) {
-            profile = earlyProfile;
+        Phase2.versionDetected(detected, resolved.profile, resolved);
+        if (!resolved.ok()) {
+            AgentMain.log(
+                "Desteklenmeyen istemci: surum=" + version
+                    + " loader=" + loader
+                    + " mapping=" + detected.mapping
+                    + " katalog=" + resolved.reason
+                    + " eksik=" + resolved.missing
+            );
+            return null;
         }
-        if (profile != null) {
-            VersionProfiles.setActive(profile);
-        }
-        Phase2.versionDetected(
-            detected,
-            profile == null ? "-" : profile.id
-        );
-        boolean instance = !Modifier.isStatic(attack.getModifiers());
 
+        VersionProfile profile = resolved.profile;
+        VersionProfiles.setActive(profile);
+
+        Class<?> owner = findLoaded(loaded, profile.attackClass);
+        if (owner == null) {
+            if (logFailure) {
+                AgentMain.log(
+                    "Katalog attack sinifi henuz yuklu degil: "
+                        + profile.attackClass + " (" + profile.id + ")"
+                );
+            }
+            return null;
+        }
+        Method attack = findAttack(owner, profile.attackMethod);
+        if (attack == null) {
+            attack = findAttackShape(owner);
+            if (attack != null) {
+                AgentMain.log(
+                    "Attack metodu katalog adiyla bulunamadi; imza yedegi: "
+                        + owner.getName() + "#" + attack.getName()
+                        + " (beklenen=" + profile.attackMethod + ")"
+                );
+            }
+        }
+        if (attack == null) {
+            if (logFailure) {
+                AgentMain.log(
+                    "Attack metodu bulunamadi: " + owner.getName()
+                        + "#" + profile.attackMethod
+                );
+            }
+            return null;
+        }
+
+        String family = family(version, owner.getName());
         AgentMain.log(
             "Surum cozuldu: surum=" + version
                 + " kaynak=" + detected.source
                 + " loader=" + loader
                 + " mapping=" + detected.mapping
-                + " profil=" + (profile == null ? "-" : profile.id)
+                + " profil=" + profile.id
+                + " katalog=" + resolved.reason
+                + " dogrulandi=" + profile.verified
+                + " loaderDogrulandi=" + profile.loaderVerified
+                + " eksik=" + (resolved.missing.isEmpty() ? "-" : resolved.missing)
                 + " sinif=" + owner.getName()
                 + " metot=" + attack.getName()
                 + " aile=" + family
@@ -204,159 +184,22 @@ public final class VersionResolver {
             loader,
             version,
             family,
-            instance,
+            !Modifier.isStatic(attack.getModifiers()),
             profile
         );
     }
 
-    public static PacketTarget resolvePacket(Instrumentation instrumentation) {
-        if (instrumentation == null) {
-            return null;
-        }
-        Class<?> owner = findConnection(instrumentation.getAllLoadedClasses());
-        if (owner == null) {
-            return null;
-        }
-        Method send = findSend(owner);
-        if (send == null) {
-            AgentMain.log("Baglanti sinifi bulundu ama send metodu yok: " + owner.getName());
-            return null;
-        }
-        boolean instance = !Modifier.isStatic(send.getModifiers());
-        AgentMain.log(
-            "Paket hook cozuldu: sinif=" + owner.getName()
-                + " metot=" + send.getName()
-                + " imza=" + Type.getMethodDescriptor(send)
-        );
-        return new PacketTarget(
-            owner, send.getName(), Type.getMethodDescriptor(send), instance
-        );
-    }
-
-    private static Class<?> findConnection(Class<?>[] loaded) {
-        for (String name : CONNECTION_NAMES) {
-            for (Class<?> candidate : loaded) {
-                if (name.equals(candidate.getName())) {
-                    return candidate;
-                }
-            }
-        }
-        for (Class<?> candidate : loaded) {
-            String simple = candidate.getSimpleName();
-            if ("ClientConnection".equals(simple) || "Connection".equals(simple)) {
-                if (findSend(candidate) != null) {
-                    return candidate;
-                }
-            }
-        }
-        return null;
-    }
-
-    private static Method findSend(Class<?> owner) {
-        Method named = null;
-        Method shaped = null;
-        for (Method method : owner.getDeclaredMethods()) {
-            if (method.isBridge() || method.isSynthetic()
-                || method.getParameterCount() != 1
-                || method.getReturnType() != void.class
-                || Modifier.isAbstract(method.getModifiers())
-                || Modifier.isNative(method.getModifiers())
-                || Modifier.isStatic(method.getModifiers())) {
-                continue;
-            }
-            String parameter = method.getParameterTypes()[0].getName()
-                .toLowerCase(Locale.ROOT);
-            boolean packet = parameter.contains("class_2596")
-                || parameter.contains("packet");
-            if (!packet) {
-                continue;
-            }
-            String name = method.getName();
-            String lower = name.toLowerCase(Locale.ROOT);
-            if (lower.equals("send")
-                || lower.equals("sendpacket")
-                || lower.equals("method_10743")
-                || lower.equals("m_129512_")
-                || lower.equals("func_147298_b")) {
-                if (named == null || lower.equals("send") || lower.equals("method_10743")) {
-                    named = method;
-                }
-            } else if (shaped == null) {
-                shaped = method;
-            }
-        }
-        return named != null ? named : shaped;
-    }
-
-    private static Class<?> findOwner(Class<?>[] loaded, VersionProfile profile) {
-        if (profile == null || profile.attackClass == null) {
-            return null;
-        }
-        for (Class<?> candidate : loaded) {
-            if (profile.attackClass.equals(candidate.getName())) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static Class<?> findMinecraft(Class<?>[] loaded, VersionProfile profile) {
-        if (profile == null || profile.minecraftClass == null) {
-            return null;
-        }
-        for (Class<?> candidate : loaded) {
-            if (profile.minecraftClass.equals(candidate.getName())) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static Method findAttack(Class<?> owner, VersionProfile profile) {
-        if (profile == null
-            || profile.attackClass == null
-            || !profile.attackClass.equals(owner.getName())
-            || profile.attackMethod == null) {
-            return null;
-        }
-        for (Method method : owner.getDeclaredMethods()) {
-            if (method.isBridge()
-                || method.isSynthetic()
-                || method.getParameterCount() != 2
-                || method.getReturnType() != void.class
-                || !profile.attackMethod.equals(method.getName())) {
-                continue;
-            }
-            return method;
-        }
-        return null;
-    }
-
-    private static Class<?> findOwner(Class<?>[] loaded) {
-        for (String name : OWNER_NAMES) {
-            for (Class<?> candidate : loaded) {
-                if (name.equals(candidate.getName())) {
-                    return candidate;
-                }
-            }
-        }
-        for (Class<?> candidate : loaded) {
-            String simple = candidate.getSimpleName();
-            if ("MultiPlayerGameMode".equals(simple)
-                || "ClientPlayerInteractionManager".equals(simple)
-                || "PlayerControllerMP".equals(simple)) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static Class<?> findMinecraft(Class<?>[] loaded) {
+    private static Class<?> findMinecraft(Class<?>[] loaded, String version) {
         for (String name : MINECRAFT_NAMES) {
-            for (Class<?> candidate : loaded) {
-                if (name.equals(candidate.getName())) {
-                    return candidate;
-                }
+            Class<?> found = findLoaded(loaded, name);
+            if (found != null) {
+                return found;
+            }
+        }
+        for (VersionProfile candidate : VersionProfiles.candidates(version)) {
+            Class<?> found = findLoaded(loaded, candidate.minecraftClass);
+            if (found != null) {
+                return found;
             }
         }
         for (Class<?> candidate : loaded) {
@@ -368,45 +211,60 @@ public final class VersionResolver {
         return null;
     }
 
-    private static Method findAttack(Class<?> owner) {
-        Method byName = null;
-        Method byShape = null;
+    private static Class<?> findLoaded(Class<?>[] loaded, String name) {
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        for (Class<?> candidate : loaded) {
+            if (name.equals(candidate.getName())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static Method findAttack(Class<?> owner, String methodName) {
+        if (methodName == null || methodName.isEmpty()) {
+            return null;
+        }
+        for (Method method : owner.getDeclaredMethods()) {
+            if (method.isBridge()
+                || method.isSynthetic()
+                || method.getParameterCount() != 2
+                || method.getReturnType() != void.class
+                || !methodName.equals(method.getName())) {
+                continue;
+            }
+            return method;
+        }
+        return null;
+    }
+
+    /**
+     * Katalogdaki ad guncellenmis olabilir; ayni sinif icinde oyuncu+entity
+     * alan 2 parametreli void metodu dar kapsamda ara. Global sinif taramasi
+     * yoktur.
+     */
+    private static Method findAttackShape(Class<?> owner) {
         try {
             for (Method method : owner.getDeclaredMethods()) {
-                if (method.isBridge() || method.isSynthetic()) {
-                    continue;
-                }
-                if (method.getParameterCount() != 2
+                if (method.isBridge()
+                    || method.isSynthetic()
+                    || method.getParameterCount() != 2
                     || method.getReturnType() != void.class
                     || Modifier.isAbstract(method.getModifiers())
                     || Modifier.isNative(method.getModifiers())) {
                     continue;
                 }
-
-                String name = method.getName();
-                String lower = name.toLowerCase(Locale.ROOT);
-                boolean named = lower.equals("attackentity")
-                    || lower.equals("attack")
-                    || lower.equals("method_2918")
-                    || lower.equals("m_105268_")
-                    || lower.equals("func_78764_a");
-
-                Class<?> first = method.getParameterTypes()[0];
-                Class<?> second = method.getParameterTypes()[1];
-                boolean shape = looksLikePlayer(first) && looksLikeEntity(second);
-
-                if (named && shape) {
-                    if (byName == null || lower.equals("attackentity") || lower.equals("method_2918")) {
-                        byName = method;
-                    }
-                } else if (shape && byShape == null) {
-                    byShape = method;
+                if (looksLikePlayer(method.getParameterTypes()[0])
+                    && looksLikeEntity(method.getParameterTypes()[1])) {
+                    return method;
                 }
             }
         } catch (Throwable throwable) {
-            AgentMain.log("Attack metodu taramasi basarisiz: " + throwable);
+            AgentMain.log("Attack imza yedegi basarisiz: " + throwable);
         }
-        return byName != null ? byName : byShape;
+        return null;
     }
 
     private static boolean looksLikePlayer(Class<?> type) {
@@ -452,6 +310,7 @@ public final class VersionResolver {
                     return value.toString();
                 }
             } catch (Throwable ignored) {
+                // getVersion ornege bagli olabilir; asagidaki ipuclarina gec.
             }
         }
         String property = System.getProperty("minecraft.version");

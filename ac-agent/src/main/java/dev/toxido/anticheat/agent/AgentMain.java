@@ -142,6 +142,9 @@ public final class AgentMain {
      */
     static void log(String message) {
         String line = "[" + Instant.now() + "] " + message;
+        if (Boolean.getBoolean("ac.debug")) {
+            System.err.println(line);
+        }
         AgentClient client = remoteClient;
         if (client != null) {
             client.sendLog(line);

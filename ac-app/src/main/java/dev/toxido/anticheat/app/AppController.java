@@ -340,6 +340,10 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             + " loader=" + text(capability, "loader")
             + " mapping=" + text(capability, "mapping")
             + " profil=" + text(capability, "profile")
+            + " katalog=" + text(capability, "catalog_reason")
+            + " dogrulandi=" + text(capability, "catalog_verified")
+            + " loaderDogrulandi=" + text(capability, "catalog_loader_verified")
+            + " eksik=" + text(capability, "catalog_missing")
             + " | jvm=" + text(capability, "jvm_main")
             + " | packet=" + text(capability, "packet")
             + " (" + text(capability, "packet_reason") + ")"
@@ -377,6 +381,10 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             + "|" + text(capability, "instance")
             + "|" + text(capability, "netty_detail")
             + "|" + text(capability, "install_attempts")
+            + "|" + text(capability, "catalog_reason")
+            + "|" + text(capability, "catalog_missing")
+            + "|" + text(capability, "catalog_verified")
+            + "|" + text(capability, "catalog_loader_verified")
             + "|" + text(capability, "reason");
     }
 
@@ -512,6 +520,13 @@ public final class AppController implements Runnable, AgentBridge.Listener {
             copyCapability(capability, payload, "loader");
             copyCapability(capability, payload, "mapping");
             copyCapability(capability, payload, "profile");
+            copyCapability(capability, payload, "catalog_reason");
+            copyCapability(capability, payload, "catalog_missing");
+            copyCapability(capability, payload, "catalog_verified");
+            copyCapability(capability, payload, "catalog_loader_verified");
+            copyCapability(capability, payload, "catalog_notes");
+            copyCapability(capability, payload, "packet_kind");
+            copyCapability(capability, payload, "screen_access");
             copyCapability(capability, payload, "jvm_main");
             copyCapability(capability, payload, "pid");
             copyCapability(capability, payload, "hook");
@@ -657,7 +672,13 @@ public final class AppController implements Runnable, AgentBridge.Listener {
         payload.addProperty("message", line);
         payload.addProperty("source", "app");
         try {
-            api.sendEvent(currentSession, currentToken, "log", "app", payload);
+            api.sendEvent(
+                currentSession,
+                currentToken,
+                "log",
+                "app:" + System.nanoTime(),
+                payload
+            );
         } catch (Exception ignored) {
             // Uzak log gonderimi servis akisini durdurmaz.
         }

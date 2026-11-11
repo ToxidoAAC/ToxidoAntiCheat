@@ -23,6 +23,11 @@ public final class Phase2 {
     private static volatile String versionSource = "unknown";
     private static volatile String mapping = "unknown";
     private static volatile String profileId = "-";
+    private static volatile String catalogReason = "not_started";
+    private static volatile String catalogMissing = "";
+    private static volatile boolean catalogVerified;
+    private static volatile boolean catalogLoaderVerified;
+    private static volatile String catalogNotes = "";
     private static volatile String inputReason = "not_started";
     private static volatile String jvmMain = "unknown";
     private static volatile long jvmPid = -1L;
@@ -127,6 +132,11 @@ public final class Phase2 {
         reason = "restart_requested";
         nettyDetail = "restart";
         nettyTickAt = System.currentTimeMillis();
+        catalogReason = "not_started";
+        catalogMissing = "";
+        catalogVerified = false;
+        catalogLoaderVerified = false;
+        catalogNotes = "";
         GameVersionDetector.clearCache();
         NettyHook.restart();
         emitCapability();
@@ -152,6 +162,9 @@ public final class Phase2 {
                 }
             } catch (Throwable throwable) {
                 AgentMain.log("Capability yenileme hatasi: " + throwable);
+                java.io.StringWriter buffer = new java.io.StringWriter();
+                throwable.printStackTrace(new java.io.PrintWriter(buffer));
+                AgentMain.log(buffer.toString());
             }
         }
     }
@@ -440,20 +453,40 @@ public final class Phase2 {
 
     static void versionDetected(
         GameVersionDetector.Result detected,
-        String selectedProfile
+        VersionProfile profile,
+        VersionCatalog.Resolved resolved
     ) {
-        if (detected == null) {
+        if (detected == null && profile == null && resolved == null) {
             return;
         }
-        boolean changed = !detected.version.equals(detectedVersion)
-            || !detected.loader.equals(detectedLoader)
-            || !detected.source.equals(versionSource)
-            || !(selectedProfile == null ? "-" : selectedProfile).equals(profileId);
-        detectedVersion = detected.version;
-        detectedLoader = detected.loader;
-        versionSource = detected.source;
-        mapping = detected.mapping;
-        profileId = selectedProfile == null ? "-" : selectedProfile;
+        String nextProfile = profile == null ? "-" : profile.id;
+        String nextReason = resolved == null ? "unknown" : resolved.reason;
+        String nextMissing = resolved == null ? "" : resolved.missing;
+        boolean nextVerified = profile != null && profile.verified;
+        boolean nextLoaderVerified = profile != null && profile.loaderVerified;
+        String nextNotes = profile == null || profile.notes == null ? "" : profile.notes;
+        boolean changed = detected != null
+            && (!detected.version.equals(detectedVersion)
+                || !detected.loader.equals(detectedLoader)
+                || !detected.source.equals(versionSource))
+            || !nextProfile.equals(profileId)
+            || !nextReason.equals(catalogReason)
+            || !nextMissing.equals(catalogMissing)
+            || nextVerified != catalogVerified
+            || nextLoaderVerified != catalogLoaderVerified
+            || !nextNotes.equals(catalogNotes);
+        if (detected != null) {
+            detectedVersion = detected.version;
+            detectedLoader = detected.loader;
+            versionSource = detected.source;
+            mapping = detected.mapping;
+        }
+        profileId = nextProfile;
+        catalogReason = nextReason;
+        catalogMissing = nextMissing;
+        catalogVerified = nextVerified;
+        catalogLoaderVerified = nextLoaderVerified;
+        catalogNotes = nextNotes;
         if (changed) {
             emitCapability();
         }
@@ -519,6 +552,7 @@ public final class Phase2 {
         long nettyAge = nettyTickAt == 0L
             ? -1L
             : (System.currentTimeMillis() - nettyTickAt) / 1000L;
+        VersionProfile activeProfile = target == null ? null : target.profile;
         return "{\"triggerbot\":" + Json.quote(trigger)
             + ",\"injection\":" + Json.quote("active")
             + ",\"version\":" + Json.quote(version)
@@ -526,6 +560,17 @@ public final class Phase2 {
             + ",\"loader\":" + Json.quote(loader)
             + ",\"mapping\":" + Json.quote(mapping)
             + ",\"profile\":" + Json.quote(profileId)
+            + ",\"catalog_reason\":" + Json.quote(catalogReason)
+            + ",\"catalog_missing\":" + Json.quote(catalogMissing)
+            + ",\"catalog_verified\":" + catalogVerified
+            + ",\"catalog_loader_verified\":" + catalogLoaderVerified
+            + ",\"catalog_notes\":" + Json.quote(catalogNotes)
+            + ",\"packet_kind\":" + Json.quote(
+                activeProfile == null || activeProfile.packetKind == null
+                    ? "-" : activeProfile.packetKind)
+            + ",\"screen_access\":" + Json.quote(
+                activeProfile == null || activeProfile.screenAccess == null
+                    ? "-" : activeProfile.screenAccess)
             + ",\"jvm_main\":" + Json.quote(jvmMain)
             + ",\"pid\":" + jvmPid
             + ",\"hook\":" + Json.quote(hook)

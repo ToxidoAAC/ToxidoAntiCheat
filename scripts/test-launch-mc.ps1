@@ -104,6 +104,9 @@ $script:argList.Add('-XX:ReservedCodeCacheSize=64M')
 $script:argList.Add('-XX:-UseCompressedOops')
 $script:argList.Add('-XX:TieredStopAtLevel=1')
 $script:argList.Add("-XX:ErrorFile=$($buildDir -replace '\\','/')/hs_err_${tag}_%p.log")
+if ($env:AC_DEBUG -eq '1') {
+    $script:argList.Add('-Dac.debug=true')
+}
 
 function Expand-Placeholders([string]$value) {
     $map = @{

@@ -16,6 +16,7 @@ final class GameState {
     final boolean targetInTabList;
     final String targetType;
     final String targetName;
+    final String targetKind;
     final String targetUuid;
 
     private GameState(
@@ -28,6 +29,7 @@ final class GameState {
         boolean targetInTabList,
         String targetType,
         String targetName,
+        String targetKind,
         String targetUuid
     ) {
         this.reliable = reliable;
@@ -39,6 +41,7 @@ final class GameState {
         this.targetInTabList = targetInTabList;
         this.targetType = targetType;
         this.targetName = targetName;
+        this.targetKind = targetKind;
         this.targetUuid = targetUuid;
     }
 
@@ -54,9 +57,17 @@ final class GameState {
             Object minecraft = staticInstance(target.minecraft);
             if (minecraft != null) {
                 reliable = true;
-                Object screen = profile == null
-                    ? null
-                    : fieldByNames(minecraft, profile.screenField);
+                Object screen = null;
+                if (profile != null
+                    && "gui".equalsIgnoreCase(profile.screenAccess)) {
+                    // 26.2+ istemcilerinde ekran Minecraft.gui.screen alaninda.
+                    Object gui = fieldByNames(minecraft, profile.guiField);
+                    if (gui != null) {
+                        screen = fieldByNames(gui, profile.guiScreenField);
+                    }
+                } else if (profile != null) {
+                    screen = fieldByNames(minecraft, profile.screenField);
+                }
                 if (screen == null) {
                     screen = fieldByNames(
                         minecraft, "currentScreen", "field_1755", "screen"
@@ -194,8 +205,51 @@ final class GameState {
             inTabList,
             type,
             name(targetObject),
+            kind(targetObject),
             targetUuid == null ? "" : targetUuid.toString()
         );
+    }
+
+    private static String kind(Object target) {
+        if (target == null) {
+            return "";
+        }
+        try {
+            Object type = invokeNoArg(
+                target,
+                "getType",
+                "method_5864",
+                "func_70022_Q"
+            );
+            Object typeObject = type == null ? target : type;
+            Object description = invokeNoArg(
+                typeObject,
+                "getDescriptionId",
+                "getTranslationKey",
+                "method_5897",
+                "func_200713_d"
+            );
+            String value = description == null ? null : description.toString();
+            if (value == null || value.isEmpty()) {
+                Object display = invokeNoArg(
+                    typeObject,
+                    "getName",
+                    "getString",
+                    "method_5477"
+                );
+                value = display == null ? null : display.toString();
+            }
+            if (value == null || value.isEmpty()) {
+                value = typeObject.getClass().getSimpleName();
+            }
+            value = value.toLowerCase(Locale.ROOT)
+                .replace("entity.minecraft.", "")
+                .replace("minecraft:", "")
+                .replace("entity.", "");
+            return value;
+        } catch (Throwable ignored) {
+            return target.getClass().getSimpleName();
+        }
     }
 
     private static Object staticInstance(Class<?> type) {

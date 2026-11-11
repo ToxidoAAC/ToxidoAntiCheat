@@ -517,8 +517,28 @@ class ChannelManager:
                 value=(
                     f"kaynak: `{source or '-'}`\n"
                     f"profil: `{profile or '-'}`\n"
+                    f"mapping: `{latest.get('mapping') or '-'}`\n"
                     f"jvm: `{_clip(str(jvm_main or '-'), 80)}`"
                 ),
+                inline=False,
+            )
+        catalog_reason = latest.get("catalog_reason")
+        if catalog_reason:
+            def _flag(value):
+                return "evet" if value is True or str(value).lower() == "true" else "hayır"
+
+            catalog_lines = [
+                f"durum: `{catalog_reason}`",
+                f"profil doğrulama: `{_flag(latest.get('catalog_verified'))}`",
+                f"loader doğrulama: `{_flag(latest.get('catalog_loader_verified'))}`",
+                f"eksik: `{latest.get('catalog_missing') or '-'}`",
+            ]
+            notes = latest.get("catalog_notes")
+            if notes:
+                catalog_lines.append(f"not: `{_clip(str(notes), 180)}`")
+            embed.add_field(
+                name="📚 Katalog",
+                value="\n".join(catalog_lines),
                 inline=False,
             )
         embed.add_field(
@@ -636,7 +656,8 @@ class ChannelManager:
                 inline=True,
             )
             species = (
-                payload.get("target_name")
+                payload.get("target_kind")
+                or payload.get("target_name")
                 or str(payload.get("target_type") or "")
                 .replace("$", "")
                 .rsplit(".", 1)[-1]

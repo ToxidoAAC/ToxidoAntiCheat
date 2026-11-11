@@ -129,6 +129,7 @@ public final class AgentClient implements Runnable {
             + ",\"raw_click\":" + event.rawClick
             + ",\"target_type\":" + Json.quote(event.targetType)
             + ",\"target_name\":" + Json.quote(event.targetName)
+            + ",\"target_kind\":" + Json.quote(event.targetKind)
             + ",\"target_uuid\":" + Json.quote(event.targetUuid)
             + ",\"hook\":" + Json.quote(event.hook)
             + ",\"evidence\":" + Json.quote(event.evidence)
@@ -139,7 +140,7 @@ public final class AgentClient implements Runnable {
     public void sendLog(String message) {
         String payload = "{\"message\":" + Json.quote(message)
             + ",\"source\":\"agent\"}";
-        sendEvent("log", "agent", payload);
+        sendEvent("log", "agent:" + System.nanoTime(), payload);
     }
 
     public void sendEvent(String event, String key, String payloadJson) {

@@ -13,6 +13,7 @@ public final class TriggerEvent {
     public final boolean rawClick;
     public final String targetType;
     public final String targetName;
+    public final String targetKind;
     public final String targetUuid;
     public final String evidence;
 
@@ -28,6 +29,7 @@ public final class TriggerEvent {
         boolean rawClick,
         String targetType,
         String targetName,
+        String targetKind,
         String targetUuid,
         String evidence
     ) {
@@ -42,6 +44,7 @@ public final class TriggerEvent {
         this.rawClick = rawClick;
         this.targetType = targetType;
         this.targetName = targetName;
+        this.targetKind = targetKind;
         this.targetUuid = targetUuid;
         this.evidence = evidence;
     }

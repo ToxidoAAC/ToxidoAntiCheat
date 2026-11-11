@@ -26,19 +26,6 @@ final class NettyHook {
         "net.minecraft.client.MinecraftClient"
     };
 
-    /*
-     * Fabric 1.21.11 intermediary sabitleri. Bunlar runtime'da arama
-     * yapmadan dogrudan kullanilir; boylece method_1562 gibi bir getter
-     * null donse bile client world uzerinden network handler'a ulasilir.
-     */
-    private static final String MC_12111_CLASS = "net.minecraft.class_310";
-    private static final String MC_12111_WORLD_FIELD = "field_1724";
-    private static final String WORLD_12111_NETWORK_HANDLER_FIELD = "field_3944";
-    private static final String NETWORK_HANDLER_12111_CLASS = "net.minecraft.class_634";
-    private static final String NETWORK_HANDLER_12111_CONNECTION_METHOD = "method_48296";
-    private static final String CONNECTION_12111_CLASS = "net.minecraft.class_2535";
-    private static final String CONNECTION_12111_CHANNEL_FIELD = "field_11651";
-
     private static volatile String lastState = "";
     private static volatile boolean handlerLoadFailed;
     private static volatile String instanceReason = "not_started";
@@ -242,16 +229,20 @@ final class NettyHook {
                 GameVersionDetector.Result early = GameVersionDetector.detect(
                     null, gameDir, profileName
                 );
-                VersionProfile selected = VersionProfiles.select(
+                VersionCatalog.Resolved resolved = VersionProfiles.resolve(
                     early.version, early.loader, early.mapping
                 );
-                if (selected != null) {
-                    profile = selected;
-                    VersionProfiles.setActive(selected);
-                    Phase2.versionDetected(early, selected.id);
+                Phase2.versionDetected(early, resolved.profile, resolved);
+                if (resolved.ok()) {
+                    profile = resolved.profile;
+                    VersionProfiles.setActive(profile);
                     AgentMain.log(
-                        "Surum profili secildi: " + selected.id
+                        "Surum profili secildi: " + profile.id
                             + " (" + early.summary() + ")"
+                            + " katalog=" + resolved.reason
+                            + " dogrulandi=" + profile.verified
+                            + " loaderDogrulandi=" + profile.loaderVerified
+                            + " eksik=" + (resolved.missing.isEmpty() ? "-" : resolved.missing)
                     );
                 }
             }
@@ -292,13 +283,19 @@ final class NettyHook {
                 GameVersionDetector.Result detected = GameVersionDetector.detect(
                     minecraftClass, gameDir, profileName
                 );
-                VersionProfile selected = VersionProfiles.select(
+                VersionCatalog.Resolved resolved = VersionProfiles.resolve(
                     detected.version, detected.loader, detected.mapping
                 );
-                if (selected == null) {
-                    state(client, "unsupported_version " + detected.summary());
+                Phase2.versionDetected(detected, resolved.profile, resolved);
+                if (!resolved.ok()) {
+                    state(
+                        client,
+                        "unsupported_version " + detected.summary()
+                            + " " + resolved.reason
+                    );
                     return;
                 }
+                VersionProfile selected = resolved.profile;
                 if (profile != null && !profile.id.equals(selected.id)) {
                     AgentMain.log(
                         "Surum profili duzeltildi: " + profile.id
@@ -307,27 +304,50 @@ final class NettyHook {
                 }
                 profile = selected;
                 VersionProfiles.setActive(selected);
-                Phase2.versionDetected(detected, selected.id);
                 AgentMain.log(
                     "Surum profili secildi: " + selected.id
                         + " (" + detected.summary() + ")"
+                        + " katalog=" + resolved.reason
+                        + " dogrulandi=" + selected.verified
+                        + " loaderDogrulandi=" + selected.loaderVerified
+                        + " eksik=" + (resolved.missing.isEmpty() ? "-" : resolved.missing)
                 );
             }
 
             Object minecraft = minecraftInstance;
 
-            step("network-handler");
-            Object networkHandler = findNetworkHandler(minecraft);
-            if (networkHandler == null) {
-                state(client, "waiting_for_network_handler " + brief(minecraft.getClass()));
-                return;
-            }
-
             step("connection");
-            Object connection = findConnection(networkHandler);
+            Object connection = null;
+            // 26.x istemcilerinde Minecraft.getConnection() dogrudan
+            // baglantiya ulasir; network handler ara adimina gerek yok.
+            if (profile != null && profile.minecraftConnectionMethod != null) {
+                Object direct = invokeNoArg(
+                    minecraft, profile.minecraftConnectionMethod
+                );
+                if (direct != null && isConnectionType(direct.getClass())) {
+                    connection = direct;
+                }
+            }
             if (connection == null) {
-                state(client, "waiting_for_connection " + brief(networkHandler.getClass()));
-                return;
+                step("network-handler");
+                Object networkHandler = findNetworkHandler(minecraft);
+                if (networkHandler == null) {
+                    state(
+                        client,
+                        "waiting_for_network_handler " + brief(minecraft.getClass())
+                    );
+                    return;
+                }
+
+                step("connection");
+                connection = findConnection(networkHandler);
+                if (connection == null) {
+                    state(
+                        client,
+                        "waiting_for_connection " + brief(networkHandler.getClass())
+                    );
+                    return;
+                }
             }
 
             step("channel");
@@ -347,19 +367,28 @@ final class NettyHook {
                 return;
             }
 
-            Object packetHandler = pipelineGet(pipeline, "packet_handler");
+            String handlerName = profile == null
+                || profile.pipelineHandler == null
+                || profile.pipelineHandler.isEmpty()
+                ? "packet_handler"
+                : profile.pipelineHandler;
+            Object packetHandler = pipelineGet(pipeline, handlerName);
             if (packetHandler == null) {
-                state(client, "waiting_for_packet_handler " + brief(pipeline.getClass()));
+                state(
+                    client,
+                    "waiting_for_packet_handler " + handlerName
+                        + " " + brief(pipeline.getClass())
+                );
                 return;
             }
 
             step("packet-handler");
-            if (ensureHandler(pipeline, client)) {
+            if (ensureHandler(pipeline, client, handlerName)) {
                 lastState = "active";
                 stepSince = 0L;
-                Phase2.nettyNote("hazir:netty");
+                Phase2.nettyNote("hazir:netty:" + handlerName);
                 Phase2.nettyActive(
-                    "netty:packet_handler",
+                    "netty:" + handlerName,
                     "netty_packet_handler"
                 );
             }
@@ -370,7 +399,11 @@ final class NettyHook {
         }
     }
 
-    private static boolean ensureHandler(Object pipeline, AgentClient client) {
+    private static boolean ensureHandler(
+        Object pipeline,
+        AgentClient client,
+        String handlerName
+    ) {
         Object existing = pipelineGet(pipeline, HANDLER_NAME);
         if (existing != null) {
             if (Proxy.isProxyClass(existing.getClass())
@@ -382,7 +415,10 @@ final class NettyHook {
 
         Object handler;
         try {
-            handler = createProxy(pipeline.getClass().getClassLoader());
+            handler = createProxy(
+                pipeline.getClass().getClassLoader(),
+                "netty:" + handlerName
+            );
         } catch (Throwable throwable) {
             handlerLoadFailed = true;
             AgentMain.log("Netty proxy handler olusturulamadi: " + throwable);
@@ -405,10 +441,13 @@ final class NettyHook {
         try {
             addBefore.setAccessible(true);
             addBefore.invoke(
-                pipeline, "packet_handler", HANDLER_NAME, handler
+                pipeline, handlerName, HANDLER_NAME, handler
             );
-            AgentMain.log("Netty packet hook yerlestirildi (proxy): packet_handler");
-            AgentMain.debug("[NETTY] handler=toxido_packet_hook added");
+            AgentMain.log(
+                "Netty packet hook yerlestirildi (proxy): " + handlerName
+            );
+            AgentMain.debug("[NETTY] handler=toxido_packet_hook added before="
+                + handlerName);
             return true;
         } catch (Throwable throwable) {
             AgentMain.log("Netty handler pipeline'a eklenemedi: " + throwable);
@@ -425,7 +464,7 @@ final class NettyHook {
      * oyunun classloader'inda, game Netty arayuzlerini uygulayan bir
      * dinamik proxy olarak olusturuyoruz.
      */
-    private static Object createProxy(ClassLoader loader) {
+    private static Object createProxy(ClassLoader loader, String label) {
         if (loader == null || handlerLoadFailed) {
             return null;
         }
@@ -436,7 +475,7 @@ final class NettyHook {
             return Proxy.newProxyInstance(
                 loader,
                 new Class<?>[]{outbound},
-                new OutboundProxy(loader)
+                new OutboundProxy(loader, label)
             );
         } catch (Throwable throwable) {
             AgentMain.log("Netty proxy sinifi yuklenemedi: " + throwable);
@@ -446,11 +485,14 @@ final class NettyHook {
 
     private static final class OutboundProxy implements InvocationHandler {
         private final Class<?> contextType;
+        private final String label;
 
-        private OutboundProxy(ClassLoader loader) throws ClassNotFoundException {
+        private OutboundProxy(ClassLoader loader, String label)
+            throws ClassNotFoundException {
             this.contextType = Class.forName(
                 "io.netty.channel.ChannelHandlerContext", false, loader
             );
+            this.label = label;
         }
 
         @Override
@@ -481,7 +523,7 @@ final class NettyHook {
             }
             if ("write".equals(name) && args != null && args.length >= 2) {
                 try {
-                    HookBridge.onPacket(args[1], "netty:packet_handler");
+                    HookBridge.onPacket(args[1], label);
                 } catch (Throwable ignored) {
                     // Paket incelemesi basarisiz olsa da yazma devam etmeli.
                 }
@@ -865,7 +907,16 @@ final class NettyHook {
         VersionProfile active = profile;
         if (active != null
             && classMatches(networkHandler.getClass(), active.networkHandlerClass)) {
-            Object direct = invokeNoArg(networkHandler, active.connectionMethod);
+            Object direct = null;
+            if (active.connectionMethod != null
+                && !active.connectionMethod.isEmpty()) {
+                direct = invokeNoArg(networkHandler, active.connectionMethod);
+            }
+            if (direct == null
+                && active.connectionField != null
+                && !active.connectionField.isEmpty()) {
+                direct = readField(networkHandler, active.connectionField);
+            }
             if (direct != null
                 && (classMatches(direct.getClass(), active.connectionClass)
                     || isConnectionType(direct.getClass()))) {
@@ -922,7 +973,15 @@ final class NettyHook {
         VersionProfile active = profile;
         if (active != null
             && classMatches(connection.getClass(), active.connectionClass)) {
-            Object direct = readField(connection, active.channelField);
+            Object direct = null;
+            if (active.channelField != null && !active.channelField.isEmpty()) {
+                direct = readField(connection, active.channelField);
+            }
+            if (direct == null
+                && active.channelMethod != null
+                && !active.channelMethod.isEmpty()) {
+                direct = invokeNoArg(connection, active.channelMethod);
+            }
             if (direct != null) {
                 return direct;
             }
