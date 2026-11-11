@@ -76,7 +76,9 @@ public final class AgentBridge implements Closeable {
         Listener current = this.listener;
         long sessionGeneration = -1L;
         try {
-            candidate.setSoTimeout(30_000);
+            // Okuma zaman asimi yok: ajan 5 sn'de bir kalp atisi gonderir.
+            // Eski 30 sn siniri, el sikismasi onayi gecikince baglantiyi
+            // gereksiz yere kapatip panonun 2/4'te donmasina yol acabiliyordu.
             BufferedReader in = new BufferedReader(
                 new InputStreamReader(candidate.getInputStream(), StandardCharsets.UTF_8));
             BufferedWriter writer = new BufferedWriter(

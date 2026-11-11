@@ -61,6 +61,10 @@ public final class AgentClient implements Runnable {
                 }
 
                 sendHello();
+                // Onay (hello_ack) gecikse veya kaybolsa bile baglanti canli
+                // kalsin: kalp atisi kopru tarafindaki okuma zaman asimini
+                // besler ve yetenek guncellemeleri akmaya devam eder.
+                startHeartbeat();
 
                 String line;
                 while ((line = in.readLine()) != null) {
@@ -165,7 +169,7 @@ public final class AgentClient implements Runnable {
 
     private void startHeartbeat() {
         if (heartbeatStarted.compareAndSet(0, 1)) {
-            AgentMain.log("El sikismasi kabul edildi; kalp atisi basliyor.");
+            AgentMain.log("Kalp atisi basliyor.");
             Thread thread = new Thread(this::heartbeatLoop, "toxido-ac-agent-heartbeat");
             thread.setDaemon(true);
             thread.start();
@@ -205,9 +209,9 @@ public final class AgentClient implements Runnable {
             out.newLine();
             out.flush();
         } catch (Exception exception) {
-            // Yazma hatasi tum ajani durdurmaz; baglanti dusurulur ve
-            // disaridaki dongu yeniden baglanir.
-            AgentMain.log("Yazma hatasi; baglanti yenilenecek.");
+            // Onemli: out once null yapilir. Aksi halde hata logu ayni bozuk
+            // writer uzerinden sendLog -> sendEvent -> send -> writeLine
+            // zincirini tekrar tetikler ve StackOverflowError olusur.
             out = null;
             Socket socket = activeSocket;
             if (socket != null) {
@@ -217,6 +221,7 @@ public final class AgentClient implements Runnable {
                     // kapanis hatasi onemsiz
                 }
             }
+            AgentMain.log("Yazma hatasi; baglanti yenilenecek.");
         }
     }
 
