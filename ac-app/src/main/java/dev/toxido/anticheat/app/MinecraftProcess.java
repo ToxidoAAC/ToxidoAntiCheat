@@ -4,10 +4,12 @@ import com.sun.tools.attach.VirtualMachine;
 import com.sun.tools.attach.VirtualMachineDescriptor;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,7 +36,10 @@ public record MinecraftProcess(
     private static final Pattern VERSION_PATTERN =
         Pattern.compile("--version\\s+(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))");
     private static final Pattern GAME_DIR_PATTERN =
-        Pattern.compile("--gameDir\\s+(?:\"([^\"]*)\"|(\\S+))");
+        Pattern.compile("--gameDir\\s+(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))");
+
+    private static final String MODRINTH_MAIN_CLASS =
+        "com.modrinth.theseus.minecraftlaunch";
 
     private static final String[] KNOWN_MAIN_CLASSES = {
         "net.minecraft.client.main.main",
@@ -42,24 +47,81 @@ public record MinecraftProcess(
         "org.quiltmc.loader.impl.launch.knot.knotclient",
         "cpw.mods.bootstraplauncher.bootstraplauncher",
         "net.neoforged.bootstrap.bootstraplauncher",
-        "net.minecraftforge.bootstrap.forgebootstrap"
+        "net.minecraftforge.bootstrap.forgebootstrap",
+        // Modrinth App, oyunu bu wrapper uzerinden baslatir. Gercek
+        // Minecraft main class'i wrapper'a arguman olarak verilir.
+        MODRINTH_MAIN_CLASS
     };
 
     public static Optional<MinecraftProcess> find() {
         try {
             long selfPid = ProcessHandle.current().pid();
-            return VirtualMachine.list().stream()
-                .filter(descriptor -> !Long.toString(selfPid).equals(descriptor.id()))
-                .filter(descriptor -> isMinecraft(descriptor.displayName()))
-                .map(MinecraftProcess::parse)
-                .filter(Objects::nonNull)
-                // Launcher JVM'leri (orn. TLauncher) oyun sanilmasin.
+            List<MinecraftProcess> candidates = new ArrayList<>();
+
+            for (VirtualMachineDescriptor descriptor : VirtualMachine.list()) {
+                if (Long.toString(selfPid).equals(descriptor.id())) {
+                    continue;
+                }
+                String displayName = descriptor.displayName();
+                if (!isMinecraft(displayName)) {
+                    continue;
+                }
+                MinecraftProcess parsed = parse(descriptor.id(), displayName);
+                if (parsed == null) {
+                    // Bazi launcher'lar gorunen adda yalnizca main class'i
+                    // birakir; oyun argumanlarini attach ile okumayi dene.
+                    parsed = parse(descriptor.id(), commandLine(descriptor.id()));
+                }
+                if (parsed != null) {
+                    candidates.add(parsed);
+                }
+            }
+
+            return candidates.stream()
                 .filter(process -> score(process.displayName()) > 0)
                 .max(Comparator.comparingInt(
                     process -> score(process.displayName())
                 ));
         } catch (Exception exception) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Hedef JVM'in tam komut satirini okur. Modrinth App, gercek oyun
+     * argumanlarini modrinth.process.args property'sinde \u001f ile ayirir.
+     * Bu property, wrapper'in gorunen adinda arguman olmasa bile kullanilir.
+     */
+    private static String commandLine(String pid) {
+        try {
+            VirtualMachine machine = VirtualMachine.attach(pid);
+            try {
+                Properties properties = machine.getSystemProperties();
+                String command = properties.getProperty("sun.java.command");
+                String modrinthArgs = properties.getProperty("modrinth.process.args");
+
+                StringBuilder combined = new StringBuilder();
+                if (command != null && !command.isBlank()) {
+                    combined.append(command);
+                }
+                if (modrinthArgs != null && !modrinthArgs.isBlank()) {
+                    if (combined.length() > 0) {
+                        combined.append(' ');
+                    }
+                    combined.append(modrinthArgs.replace('\u001f', ' '));
+                }
+                return combined.length() == 0 ? null : combined.toString();
+            } finally {
+                try {
+                    machine.detach();
+                } catch (Exception ignored) {
+                    // Detach basarisiz olsa da okuma tamamlanmis olabilir.
+                }
+            }
+        } catch (Exception ignored) {
+            // Attach edilemeyen JVM'ler (farkli kullanici, kapali attach
+            // mekanizmasi vb.) Minecraft adayi olarak degerlendirilmez.
+            return null;
         }
     }
 
@@ -110,24 +172,26 @@ public record MinecraftProcess(
         return lower.contains("--username") && lower.contains("--version");
     }
 
-    private static MinecraftProcess parse(VirtualMachineDescriptor descriptor) {
-        String displayName = descriptor.displayName();
-        String username = value(displayName, USERNAME_PATTERN);
+    private static MinecraftProcess parse(String pid, String commandLine) {
+        if (commandLine == null || commandLine.isBlank()) {
+            return null;
+        }
+        String username = value(commandLine, USERNAME_PATTERN);
         if (username == null || username.isBlank()) {
             return null;
         }
-        String gameDir = value(displayName, GAME_DIR_PATTERN);
+        String gameDir = value(commandLine, GAME_DIR_PATTERN);
         if (gameDir == null || gameDir.isBlank()) {
             gameDir = defaultGameDir();
         }
         try {
             return new MinecraftProcess(
-                Long.parseLong(descriptor.id()),
+                Long.parseLong(pid),
                 username,
-                value(displayName, UUID_PATTERN),
-                value(displayName, VERSION_PATTERN),
+                value(commandLine, UUID_PATTERN),
+                value(commandLine, VERSION_PATTERN),
                 gameDir,
-                displayName
+                commandLine
             );
         } catch (NumberFormatException exception) {
             return null;
