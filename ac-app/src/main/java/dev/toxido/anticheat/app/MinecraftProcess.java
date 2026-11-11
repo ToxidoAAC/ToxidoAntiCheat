@@ -36,7 +36,9 @@ public record MinecraftProcess(
     private static final Pattern VERSION_PATTERN =
         Pattern.compile("--version\\s+(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))");
     private static final Pattern GAME_DIR_PATTERN =
-        Pattern.compile("--gameDir\\s+(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))");
+        Pattern.compile(
+            "--gameDir(?:\\s+|=)(?:\"([^\"]*)\"|(.+?)(?=\\s+--|$))"
+        );
 
     private static final String MODRINTH_MAIN_CLASS =
         "com.modrinth.theseus.minecraftlaunch";
@@ -212,6 +214,9 @@ public record MinecraftProcess(
         if (!matcher.find()) {
             return null;
         }
-        return matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
+        String value = matcher.group(1) != null
+            ? matcher.group(1)
+            : matcher.group(2);
+        return value == null ? null : value.trim();
     }
 }
